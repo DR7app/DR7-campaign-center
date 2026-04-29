@@ -658,7 +658,11 @@ export default function App() {
 
     setCampaigns(prev => [campaign, ...prev]);
     setActiveSubTab('tutte');
-    alert(settings.whatsappConnected ? t('newCampaign.sendSuccess') : t('newCampaign.testSuccess'));
+    const codeCount = recipients.length;
+    alert(
+      `Campagna salvata. Generati ${codeCount} codici unici (uno per destinatario).\n\n` +
+      `Vai su Campagne > Tutte > clicca "Codici / QR" per vedere link tracciati e QR di ogni destinatario.`
+    );
     setNewCampaign({ 
       name: '', 
       message: '', 
@@ -1059,17 +1063,26 @@ export default function App() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
-                                const url = URL.createObjectURL(file);
-                                const newMedia: MediaFile = {
-                                  id: `media-${Date.now()}`,
-                                  name: file.name,
-                                  url,
-                                  type: 'image',
-                                  size: file.size,
-                                  createdAt: new Date().toISOString(),
+                                if (file.size > 4 * 1024 * 1024) {
+                                  alert('Immagine troppo grande (max 4 MB).');
+                                  e.target.value = '';
+                                  return;
+                                }
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const url = reader.result as string;
+                                  const newMedia: MediaFile = {
+                                    id: `media-${Date.now()}`,
+                                    name: file.name,
+                                    url,
+                                    type: 'image',
+                                    size: file.size,
+                                    createdAt: new Date().toISOString(),
+                                  };
+                                  setMedia(prev => [newMedia, ...prev]);
+                                  setNewCampaign(prev => ({ ...prev, media: { type: 'image', url } }));
                                 };
-                                setMedia(prev => [newMedia, ...prev]);
-                                setNewCampaign(prev => ({ ...prev, media: { type: 'image', url } }));
+                                reader.readAsDataURL(file);
                                 e.target.value = '';
                               }}
                             />
@@ -1083,17 +1096,26 @@ export default function App() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (!file) return;
-                                const url = URL.createObjectURL(file);
-                                const newMedia: MediaFile = {
-                                  id: `media-${Date.now()}`,
-                                  name: file.name,
-                                  url,
-                                  type: 'video',
-                                  size: file.size,
-                                  createdAt: new Date().toISOString(),
+                                if (file.size > 4 * 1024 * 1024) {
+                                  alert('Video troppo grande per il salvataggio locale (max 4 MB). Per file pi&ugrave; grandi caricali su WhatsApp Business invece di allegarli qui.');
+                                  e.target.value = '';
+                                  return;
+                                }
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  const url = reader.result as string;
+                                  const newMedia: MediaFile = {
+                                    id: `media-${Date.now()}`,
+                                    name: file.name,
+                                    url,
+                                    type: 'video',
+                                    size: file.size,
+                                    createdAt: new Date().toISOString(),
+                                  };
+                                  setMedia(prev => [newMedia, ...prev]);
+                                  setNewCampaign(prev => ({ ...prev, media: { type: 'video', url } }));
                                 };
-                                setMedia(prev => [newMedia, ...prev]);
-                                setNewCampaign(prev => ({ ...prev, media: { type: 'video', url } }));
+                                reader.readAsDataURL(file);
                                 e.target.value = '';
                               }}
                             />
@@ -1841,24 +1863,33 @@ export default function App() {
                 <div className="flex gap-3">
                   <label className="btn-teal px-6 py-2 cursor-pointer flex items-center gap-2">
                     <Plus size={16} /> {t('common.save').toUpperCase()} MEDIA
-                    <input 
-                      type="file" 
-                      accept="image/*,video/*" 
-                      className="hidden" 
+                    <input
+                      type="file"
+                      accept="image/*,video/*"
+                      className="hidden"
                       onChange={e => {
                         const file = e.target.files?.[0];
-                        if (file) {
+                        if (!file) return;
+                        if (file.size > 4 * 1024 * 1024) {
+                          alert('File troppo grande (max 4 MB) per il salvataggio locale.');
+                          e.target.value = '';
+                          return;
+                        }
+                        const reader = new FileReader();
+                        reader.onload = () => {
                           const newMedia: MediaFile = {
                             id: `media-${Date.now()}`,
                             name: file.name,
-                            url: URL.createObjectURL(file), // Warning: transient URL
+                            url: reader.result as string,
                             type: file.type.startsWith('video') ? 'video' : 'image',
                             size: file.size,
-                            createdAt: new Date().toISOString()
+                            createdAt: new Date().toISOString(),
                           };
                           setMedia(prev => [newMedia, ...prev]);
-                        }
-                      }} 
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
                     />
                   </label>
                 </div>
