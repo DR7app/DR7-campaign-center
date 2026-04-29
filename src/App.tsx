@@ -17,6 +17,7 @@ import { VenditePanel } from './components/VenditePanel';
 import { ClientiPanel } from './components/ClientiPanel';
 import { MessaggiPanel } from './components/MessaggiPanel';
 import { CampaignSenderModal } from './components/CampaignSenderModal';
+import { WhatsappSettingsCard } from './components/WhatsappSettingsCard';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -2019,71 +2020,7 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-5">
-                    <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                       <MessageSquare size={16} className="text-[#25D366]" /> Collegamento WhatsApp
-                    </h3>
-
-                    {settings.whatsappConnected ? (
-                      <>
-                        <div className="flex items-center justify-between p-4 bg-dr7-green/5 rounded-lg border border-dr7-green/30">
-                          <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 rounded-full flex items-center justify-center bg-dr7-green text-white">
-                              <CheckCircle2 size={24} />
-                            </div>
-                            <div>
-                              <p className="font-bold text-sm">Numero WhatsApp collegato</p>
-                              <p className="text-xs text-text-secondary font-mono">+{settings.whatsappPhone || '???'}</p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => {
-                              if (confirm('Sei sicuro di voler scollegare WhatsApp?')) {
-                                setSettings((prev: any) => ({ ...prev, whatsappConnected: false, whatsappPhone: '' }));
-                              }
-                            }}
-                            className="px-4 py-2 rounded font-bold text-[10px] uppercase tracking-wide bg-dr7-red text-white hover:bg-red-600"
-                          >
-                            Scollega
-                          </button>
-                        </div>
-                        <div className="bg-gray-50 border border-border-primary rounded p-3 text-xs text-text-secondary">
-                          Modalit&agrave;: <strong className="text-black">Link diretti (gratis)</strong>. L&#39;app apre WhatsApp con il messaggio gi&agrave; pronto per ogni destinatario, tu confermi l&#39;invio. Nessun costo per messaggio.
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-xs text-text-secondary">Inserisci il numero WhatsApp della tua attivit&agrave; con prefisso internazionale (es. 39 per Italia, senza il +).</p>
-                        <form
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            const form = e.currentTarget as HTMLFormElement;
-                            const input = form.elements.namedItem('phone') as HTMLInputElement;
-                            const digits = input.value.replace(/\D/g, '');
-                            if (digits.length < 10) {
-                              alert('Numero non valido. Inserisci almeno 10 cifre con prefisso internazionale.');
-                              return;
-                            }
-                            setSettings((prev: any) => ({ ...prev, whatsappConnected: true, whatsappPhone: digits }));
-                          }}
-                          className="flex gap-2"
-                        >
-                          <span className="px-3 py-2.5 bg-gray-50 border border-border-primary rounded text-sm font-mono text-text-secondary">+</span>
-                          <input
-                            name="phone"
-                            type="tel"
-                            required
-                            placeholder="393331234567"
-                            className="flex-1 px-3 py-2.5 text-sm font-mono border border-border-primary rounded focus:outline-none focus:border-dr7-teal"
-                          />
-                          <button type="submit" className="btn-teal px-4 py-2 font-bold text-xs">Collega</button>
-                        </form>
-                        <div className="bg-blue-50 border border-blue-200 rounded p-3 text-[11px] text-blue-900 leading-relaxed">
-                          <strong>Come funziona?</strong> L&#39;app genera un link WhatsApp personalizzato per ogni cliente. Quando clicchi &quot;Invia&quot;, si apre WhatsApp sul tuo dispositivo con il messaggio gi&agrave; scritto: tu controlli e invii. Funziona con WhatsApp normale o WhatsApp Business, gratis e senza API.
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <WhatsappSettingsCard settings={settings} setSettings={setSettings} />
                 </div>
 
                 <div className="space-y-6">
@@ -2354,6 +2291,12 @@ export default function App() {
           return (
             <CampaignSenderModal
               campaign={c}
+              mode={settings.whatsappMode === 'green-api' ? 'green-api' : 'link'}
+              apiCreds={settings.whatsappMode === 'green-api' ? {
+                instanceId: settings.greenApiInstanceId,
+                apiTokenInstance: settings.greenApiTokenInstance,
+                apiHost: settings.greenApiHost,
+              } : undefined}
               onClose={() => setSenderModalCampaignId(null)}
               onMarkAllSent={(id) => {
                 setCampaigns(prev => prev.map(x => x.id === id ? { ...x, status: 'Inviata' as const } : x));
