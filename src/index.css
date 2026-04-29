@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #FFFFFF;
+  --color-bg-page: #F7F7F7;
+  --color-bg-surface: #FFFFFF;
+  --color-bg-muted: #F8F9FA;
+  --color-border-primary: #E5E7EB;
+  
+  --color-dr7-teal: #2C8F7B;
+  --color-dr7-teal-hover: #24786A;
+  --color-dr7-teal-soft: #E6F4F1;
+  
+  --color-text-primary: #111111;
+  --color-text-secondary: #6B7280;
+  --color-text-muted: #9CA3AF;
+  
+  --color-dr7-blue: #2563EB;
+  --color-dr7-green: #059669;
+  --color-dr7-red: #DC2626;
+  --color-dr7-amber: #D97706;
+}
+
+@layer base {
+  body {
+    @apply bg-bg-page text-text-primary antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  }
+}
+
+.nav-active-pill {
+  @apply bg-dr7-teal text-white shadow-sm;
+}
+
+.nav-inactive-pill {
+  @apply bg-[#F3F4F6] text-text-secondary hover:bg-gray-200 transition-colors;
+}
+
+.table-header {
+  @apply text-text-secondary font-semibold text-sm border-b border-border-primary bg-bg-muted/50 uppercase tracking-wider py-3 px-4;
+}
+
+.btn-teal {
+  @apply bg-dr7-teal hover:bg-dr7-teal-hover text-white rounded-full transition-all flex items-center justify-center gap-2 font-medium;
+}
+
+.btn-blue { @apply bg-dr7-blue hover:opacity-90 text-white rounded-md transition-all; }
+.btn-green { @apply bg-dr7-green hover:opacity-90 text-white rounded-md transition-all; }
+.btn-red { @apply bg-dr7-red hover:opacity-90 text-white rounded-md transition-all; }
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #E5E7EB;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2C8F7B;
+}
