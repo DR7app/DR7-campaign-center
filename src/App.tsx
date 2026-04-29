@@ -16,7 +16,7 @@ import { RiscattiPanel } from './components/RiscattiPanel';
 import { VenditePanel } from './components/VenditePanel';
 import { ClientiPanel } from './components/ClientiPanel';
 import { MessaggiPanel } from './components/MessaggiPanel';
-import { WhatsappPaywallModal } from './components/WhatsappPaywallModal';
+import { CampaignSenderModal } from './components/CampaignSenderModal';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -512,8 +512,8 @@ export default function App() {
   // --- Recipients Modal ---
   const [recipientsModalCampaignId, setRecipientsModalCampaignId] = useState<string | null>(null);
 
-  // --- WhatsApp paywall ---
-  const [whatsappPaywallOpen, setWhatsappPaywallOpen] = useState(false);
+  // --- Sender Modal ---
+  const [senderModalCampaignId, setSenderModalCampaignId] = useState<string | null>(null);
 
   // --- Conversion types (per merchant; default list) ---
   const conversionTypes = useMemo(() => {
@@ -836,7 +836,7 @@ export default function App() {
                 </div>
               )}
               <div className={`flex ${sidebarOpen ? 'gap-1' : 'flex-col gap-2'}`}>
-                {(['it', 'en'] as Language[]).map((lang) => (
+                {(['it', 'en', 'es'] as Language[]).map((lang) => (
                   <button
                     key={lang}
                     onClick={() => setLanguage(lang)}
@@ -849,7 +849,7 @@ export default function App() {
                       }
                     `}
                   >
-                    {lang === 'it' ? 'ITA' : 'ENG'}
+                    {lang === 'it' ? 'ITA' : lang === 'en' ? 'ENG' : 'ESP'}
                   </button>
                 ))}
               </div>
@@ -1578,6 +1578,7 @@ export default function App() {
                             })()}
                             hasRecipients={(campaign.recipients?.length ?? 0) > 0}
                             onShowRecipients={() => setRecipientsModalCampaignId(campaign.id)}
+                            onSendCampaign={() => setSenderModalCampaignId(campaign.id)}
                             onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
                             schedule={campaign.schedule}
                             getSummary={getScheduleSummary}
@@ -1953,7 +1954,9 @@ export default function App() {
               <MessaggiPanel
                 campaigns={campaigns}
                 whatsappConnected={settings.whatsappConnected}
-                onUnlockWhatsapp={() => setWhatsappPaywallOpen(true)}
+                whatsappPhone={settings.whatsappPhone}
+                onOpenSettings={() => setActiveSection('settings')}
+                onSendCampaign={(id) => setSenderModalCampaignId(id)}
               />
             </motion.div>
           )}
@@ -2016,44 +2019,69 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-5">
                     <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                       <MessageSquare size={16} className="text-[#25D366]" /> {t('settings.whatsappConnection')}
+                       <MessageSquare size={16} className="text-[#25D366]" /> Collegamento WhatsApp
                     </h3>
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-border-primary">
-                       <div className="flex items-center gap-4">
-                          <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white ${settings.whatsappConnected ? 'bg-dr7-green ring-4 ring-dr7-green/10' : 'bg-gray-300'}`}>
-                             <CheckCircle2 size={24} />
+
+                    {settings.whatsappConnected ? (
+                      <>
+                        <div className="flex items-center justify-between p-4 bg-dr7-green/5 rounded-lg border border-dr7-green/30">
+                          <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-full flex items-center justify-center bg-dr7-green text-white">
+                              <CheckCircle2 size={24} />
+                            </div>
+                            <div>
+                              <p className="font-bold text-sm">Numero WhatsApp collegato</p>
+                              <p className="text-xs text-text-secondary font-mono">+{settings.whatsappPhone || '???'}</p>
+                            </div>
                           </div>
-                          <div>
-                             <p className="font-bold text-sm">Official WhatsApp Business API</p>
-                             <p className="text-xs text-text-secondary">{settings.whatsappConnected ? t('settings.activeConnection') : t('settings.noProvider')}</p>
-                          </div>
-                       </div>
-                       <button 
-                        onClick={() => setSettings((prev: any) => ({ ...prev, whatsappConnected: !prev.whatsappConnected }))}
-                        className={`px-4 py-2 rounded font-bold text-[10px] uppercase tracking-wide transition-all ${
-                          settings.whatsappConnected ? 'bg-dr7-red text-white hover:bg-red-600' : 'btn-teal'
-                        }`}
-                       >
-                          {settings.whatsappConnected ? t('settings.disconnect') : t('settings.connectNow')}
-                       </button>
-                    </div>
-                    {settings.whatsappConnected && (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div className="p-3 border border-border-primary rounded bg-white">
-                           <p className="text-[10px] font-bold text-text-secondary uppercase">API Endpoint</p>
-                           <p className="text-xs font-mono truncate">v17.0/dr7-production</p>
+                          <button
+                            onClick={() => {
+                              if (confirm('Sei sicuro di voler scollegare WhatsApp?')) {
+                                setSettings((prev: any) => ({ ...prev, whatsappConnected: false, whatsappPhone: '' }));
+                              }
+                            }}
+                            className="px-4 py-2 rounded font-bold text-[10px] uppercase tracking-wide bg-dr7-red text-white hover:bg-red-600"
+                          >
+                            Scollega
+                          </button>
                         </div>
-                        <div className="p-3 border border-border-primary rounded bg-white">
-                           <p className="text-[10px] font-bold text-text-secondary uppercase">Token Status</p>
-                           <p className="text-xs text-dr7-green font-bold">VALiD</p>
+                        <div className="bg-gray-50 border border-border-primary rounded p-3 text-xs text-text-secondary">
+                          Modalit&agrave;: <strong className="text-black">Link diretti (gratis)</strong>. L&#39;app apre WhatsApp con il messaggio gi&agrave; pronto per ogni destinatario, tu confermi l&#39;invio. Nessun costo per messaggio.
                         </div>
-                        <div className="p-3 border border-border-primary rounded bg-white">
-                           <p className="text-[10px] font-bold text-text-secondary uppercase">{t('settings.lastSync')}</p>
-                           <p className="text-xs">{t('settings.today')}, 09:45</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-xs text-text-secondary">Inserisci il numero WhatsApp della tua attivit&agrave; con prefisso internazionale (es. 39 per Italia, senza il +).</p>
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            const form = e.currentTarget as HTMLFormElement;
+                            const input = form.elements.namedItem('phone') as HTMLInputElement;
+                            const digits = input.value.replace(/\D/g, '');
+                            if (digits.length < 10) {
+                              alert('Numero non valido. Inserisci almeno 10 cifre con prefisso internazionale.');
+                              return;
+                            }
+                            setSettings((prev: any) => ({ ...prev, whatsappConnected: true, whatsappPhone: digits }));
+                          }}
+                          className="flex gap-2"
+                        >
+                          <span className="px-3 py-2.5 bg-gray-50 border border-border-primary rounded text-sm font-mono text-text-secondary">+</span>
+                          <input
+                            name="phone"
+                            type="tel"
+                            required
+                            placeholder="393331234567"
+                            className="flex-1 px-3 py-2.5 text-sm font-mono border border-border-primary rounded focus:outline-none focus:border-dr7-teal"
+                          />
+                          <button type="submit" className="btn-teal px-4 py-2 font-bold text-xs">Collega</button>
+                        </form>
+                        <div className="bg-blue-50 border border-blue-200 rounded p-3 text-[11px] text-blue-900 leading-relaxed">
+                          <strong>Come funziona?</strong> L&#39;app genera un link WhatsApp personalizzato per ogni cliente. Quando clicchi &quot;Invia&quot;, si apre WhatsApp sul tuo dispositivo con il messaggio gi&agrave; scritto: tu controlli e invii. Funziona con WhatsApp normale o WhatsApp Business, gratis e senza API.
                         </div>
-                      </div>
+                      </>
                     )}
                   </div>
                 </div>
@@ -2320,14 +2348,19 @@ export default function App() {
           );
         })()}
 
-        <WhatsappPaywallModal
-          open={whatsappPaywallOpen}
-          onClose={() => setWhatsappPaywallOpen(false)}
-          onActivate={() => {
-            alert('Per attivare WhatsApp Business contattaci a info@dr7.it');
-            setWhatsappPaywallOpen(false);
-          }}
-        />
+        {senderModalCampaignId && (() => {
+          const c = campaigns.find(x => x.id === senderModalCampaignId);
+          if (!c) return null;
+          return (
+            <CampaignSenderModal
+              campaign={c}
+              onClose={() => setSenderModalCampaignId(null)}
+              onMarkAllSent={(id) => {
+                setCampaigns(prev => prev.map(x => x.id === id ? { ...x, status: 'Inviata' as const } : x));
+              }}
+            />
+          );
+        })()}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -2751,7 +2784,7 @@ function LeadTableRow({ name, phone, lists, status, date, source, onDelete }: an
   );
 }
 
-function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasRecipients, onShowRecipients, onDelete, schedule, getSummary }: any) {
+function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasRecipients, onShowRecipients, onSendCampaign, onDelete, schedule, getSummary }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group border-b border-border-primary last:border-0">
       <td className="p-4 align-top">
@@ -2809,19 +2842,25 @@ function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasR
         </div>
       </td>
       <td className="p-4 text-right align-top">
-        <div className="flex justify-end gap-1.5">
+        <div className="flex justify-end gap-1.5 flex-wrap">
            {hasRecipients && (
-             <button
-               onClick={onShowRecipients}
-               className="px-2.5 py-1.5 bg-dr7-teal text-white text-[10px] font-bold uppercase rounded shadow-sm hover:bg-dr7-teal/90 transition-all"
-               title="Vedi codici, link e QR"
-             >
-                Codici / QR
-             </button>
+             <>
+               <button
+                 onClick={onSendCampaign}
+                 className="px-2.5 py-1.5 bg-[#25D366] text-white text-[10px] font-bold uppercase rounded shadow-sm hover:bg-[#1eb755] transition-all flex items-center gap-1"
+                 title="Invia con WhatsApp"
+               >
+                 <Send size={11} /> Invia
+               </button>
+               <button
+                 onClick={onShowRecipients}
+                 className="px-2.5 py-1.5 bg-dr7-teal text-white text-[10px] font-bold uppercase rounded shadow-sm hover:bg-dr7-teal/90 transition-all"
+                 title="Vedi codici, link e QR"
+               >
+                  Codici / QR
+               </button>
+             </>
            )}
-           <button className="p-2 bg-white border border-border-primary hover:text-dr7-teal rounded shadow-sm transition-all opacity-0 group-hover:opacity-100" title="Edit">
-              <Settings size={14} />
-           </button>
            <button className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all opacity-0 group-hover:opacity-100" onClick={onDelete} title="Delete">
               <Trash2 size={14} />
            </button>

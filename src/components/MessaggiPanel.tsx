@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { MessageSquare, Lock, ChevronRight } from 'lucide-react';
+import { MessageSquare, ChevronRight, Send, Settings as SettingsIcon } from 'lucide-react';
 
 interface CampaignRecipient {
   id: string;
@@ -23,10 +23,12 @@ interface Campaign {
 interface Props {
   campaigns: Campaign[];
   whatsappConnected: boolean;
-  onUnlockWhatsapp: () => void;
+  whatsappPhone?: string;
+  onOpenSettings: () => void;
+  onSendCampaign: (campaignId: string) => void;
 }
 
-export function MessaggiPanel({ campaigns, whatsappConnected, onUnlockWhatsapp }: Props) {
+export function MessaggiPanel({ campaigns, whatsappConnected, whatsappPhone, onOpenSettings, onSendCampaign }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const sortedCampaigns = useMemo(
@@ -45,21 +47,25 @@ export function MessaggiPanel({ campaigns, whatsappConnected, onUnlockWhatsapp }
         <p className="text-sm text-text-secondary mt-1">Storico messaggi inviati e risposte clienti</p>
       </div>
 
-      {!whatsappConnected && (
-        <div className="bg-gradient-to-r from-dr7-teal/10 to-dr7-teal/5 border border-dr7-teal/30 rounded-lg p-5 flex items-start gap-4">
-          <div className="w-10 h-10 rounded-full bg-dr7-teal/20 text-dr7-teal flex items-center justify-center flex-shrink-0">
-            <Lock size={18} />
+      {!whatsappConnected ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-5 flex items-start gap-4">
+          <div className="w-10 h-10 rounded-full bg-amber-200 text-amber-800 flex items-center justify-center flex-shrink-0">
+            <SettingsIcon size={18} />
           </div>
           <div className="flex-1">
-            <p className="text-sm font-bold text-black">Inbox WhatsApp non disponibile</p>
+            <p className="text-sm font-bold text-black">Numero WhatsApp non collegato</p>
             <p className="text-xs text-text-secondary mt-1">
-              Le risposte dei clienti e il rilevamento automatico dei codici richiedono il collegamento WhatsApp Business.
-              Sblocca questa funzione con un costo aggiuntivo.
+              Per inviare messaggi devi collegare il numero WhatsApp della tua attivit&agrave;. Servir&agrave; per generare i link a una conversazione con i tuoi clienti. Gratis, niente API necessarie.
             </p>
           </div>
-          <button onClick={onUnlockWhatsapp} className="btn-teal text-xs px-3 py-2 font-bold whitespace-nowrap">
-            Sblocca WhatsApp
+          <button onClick={onOpenSettings} className="btn-teal text-xs px-3 py-2 font-bold whitespace-nowrap">
+            Collega ora
           </button>
+        </div>
+      ) : (
+        <div className="bg-dr7-green/5 border border-dr7-green/30 rounded-lg p-3 flex items-center gap-3 text-xs">
+          <span className="w-7 h-7 rounded-full bg-dr7-green text-white flex items-center justify-center"><Send size={12} /></span>
+          <span>WhatsApp collegato (<strong className="font-mono">+{whatsappPhone}</strong>) &mdash; pronto per inviare campagne.</span>
         </div>
       )}
 
@@ -112,10 +118,20 @@ export function MessaggiPanel({ campaigns, whatsappConnected, onUnlockWhatsapp }
             </div>
           ) : (
             <div className="space-y-4">
-              <div>
-                <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Campagna</p>
-                <h2 className="text-lg font-bold text-black">{selected.name}</h2>
-                <p className="text-[11px] text-text-secondary">Stato: {selected.status} &middot; Inviata il {new Date(selected.createdAt).toLocaleString('it-IT')}</p>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Campagna</p>
+                  <h2 className="text-lg font-bold text-black">{selected.name}</h2>
+                  <p className="text-[11px] text-text-secondary">Stato: {selected.status} &middot; Creata il {new Date(selected.createdAt).toLocaleString('it-IT')}</p>
+                </div>
+                {(selected.recipients?.length ?? 0) > 0 && (
+                  <button
+                    onClick={() => onSendCampaign(selected.id)}
+                    className="bg-[#25D366] hover:bg-[#1eb755] text-white px-3 py-2 rounded text-xs font-bold flex items-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Send size={12} /> Invia con WhatsApp
+                  </button>
+                )}
               </div>
 
               <div className="bg-[#FAFAFA] border border-border-primary rounded p-4">
