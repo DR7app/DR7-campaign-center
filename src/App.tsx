@@ -3,10 +3,11 @@ import {
   Users, Send, Calendar, History, Settings, LayoutDashboard, Plus, 
   Image as ImageIcon, Video, MessageSquare, Search, Bell, MoreVertical, 
   CheckCircle2, Clock, Sparkles, ChevronRight, Filter, AlertTriangle,
-  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X
+  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X, Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
+import { translations, Language } from './translations';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -27,6 +28,53 @@ const normalizePhone = (phone: string): string => {
   }
   
   return digits;
+};
+
+const sortLeadsAlphabetically = (leads: Lead[]): Lead[] => {
+  return [...leads].sort((a, b) => {
+    const fnA = (a.firstName || '').trim().toLowerCase();
+    const fnB = (b.firstName || '').trim().toLowerCase();
+    
+    // localeCompare handles accented characters nicely
+    const firstNameCompare = fnA.localeCompare(fnB, undefined, { sensitivity: 'base' });
+    
+    if (firstNameCompare !== 0) return firstNameCompare;
+    
+    const lnA = (a.lastName || '').trim().toLowerCase();
+    const lnB = (b.lastName || '').trim().toLowerCase();
+    const lastNameCompare = lnA.localeCompare(lnB, undefined, { sensitivity: 'base' });
+    
+    if (lastNameCompare !== 0) return lastNameCompare;
+    
+    return (a.phone || '').localeCompare(b.phone || '');
+  });
+};
+
+const filterLeads = (leads: Lead[], query: string): Lead[] => {
+  if (!query) return leads;
+  const q = query.toLowerCase().trim();
+  const normalizedQueryPhone = q.replace(/\D/g, '');
+
+  return leads.filter(l => {
+    const fullName = `${l.firstName} ${l.lastName}`.toLowerCase();
+    const phone = l.phone.toLowerCase();
+    const phoneNormalized = l.phoneNormalized.toLowerCase();
+    
+    // Name search
+    if (l.firstName.toLowerCase().includes(q)) return true;
+    if (l.lastName.toLowerCase().includes(q)) return true;
+    if (fullName.includes(q)) return true;
+    
+    // Phone search
+    if (phone.includes(q)) return true;
+    if (phoneNormalized.includes(normalizedQueryPhone)) return true;
+    
+    // Also check for partial phone digits
+    const digitsOnlyLead = l.phone.replace(/\D/g, '');
+    if (normalizedQueryPhone && digitsOnlyLead.includes(normalizedQueryPhone)) return true;
+    
+    return false;
+  });
 };
 
 const COLUMN_ALIASES = {
@@ -146,6 +194,36 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<Section>('dashboard');
   const [activeSubTab, setActiveSubTab] = useState('tutte');
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = localStorage.getItem('dr7_language');
+    return (saved as Language) || 'it';
+  });
+
+  const t = (path: string): string => {
+    const keys = path.split('.');
+    let result: any = translations[language];
+    for (const key of keys) {
+      if (result && result[key]) {
+        result = result[key];
+      } else {
+        // Fallback to Italian
+        let fallback: any = translations['it'];
+        for (const fKey of keys) {
+          if (fallback && fallback[fKey]) {
+            fallback = fallback[fKey];
+          } else {
+            return path; // Last resort: show path
+          }
+        }
+        return fallback;
+      }
+    }
+    return result;
+  };
+
+  useEffect(() => {
+    localStorage.setItem('dr7_language', language);
+  }, [language]);
 
   // --- Real State Layer (with LocalStorage persistence) ---
   const [leads, setLeads] = useState<Lead[]>(() => {
@@ -167,6 +245,8 @@ export default function App() {
     const saved = localStorage.getItem('dr7_media');
     return saved ? JSON.parse(saved) : [];
   });
+
+  const [leadsSearchTerm, setLeadsSearchTerm] = useState('');
 
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('dr7_settings');
@@ -309,7 +389,7 @@ export default function App() {
     setLeadsToImport([]);
     setImportStats(null);
     setSkippedRows([]);
-    alert(`Importazione completata: ${leadsToImport.length} lead aggiunti.`);
+    alert(t('csvImport.importSuccess').replace('{count}', leadsToImport.length.toString()));
   };
 
   const handleImportLeads = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -332,13 +412,13 @@ export default function App() {
     const errors: Record<string, string> = {};
     const normPhone = normalizePhone(newLeadForm.phone);
 
-    if (!newLeadForm.firstName.trim()) errors.firstName = 'Il nome è obbligatorio.';
+    if (!newLeadForm.firstName.trim()) errors.firstName = t('leads.errors.nameRequired');
     if (!newLeadForm.phone.trim()) {
-      errors.phone = 'Il numero di telefono è obbligatorio.';
+      errors.phone = t('leads.errors.phoneRequired');
     } else if (normPhone.length < 8) {
-      errors.phone = 'Inserisci un numero di telefono valido.';
+      errors.phone = t('leads.errors.invalidPhone');
     } else if (leads.some(l => l.phoneNormalized === normPhone)) {
-      errors.phone = 'Un lead con questo numero esiste già.';
+      errors.phone = t('leads.errors.duplicatePhone');
     }
 
     if (Object.keys(errors).length > 0) {
@@ -363,7 +443,7 @@ export default function App() {
     setIsLeadModalOpen(false);
     setNewLeadForm({ firstName: '', lastName: '', phone: '' });
     setFormErrors({});
-    alert("Lead creato con successo.");
+    alert(t('leads.createSuccess'));
   };
 
   // --- Campaign Form State ---
@@ -398,22 +478,28 @@ export default function App() {
   });
 
   const getScheduleSummary = (sched: CampaignSchedule | undefined) => {
-    if (!sched) return "Nessuna pianificazione impostata.";
+    if (!sched) return t('newCampaign.noSchedule');
     const { type, recurrenceCount, recurrenceUnit, dailyTimes, weeklySlots, monthlySlots, singleDate, singleTime, conditions, isActive } = sched;
     
-    let text = isActive ? "✓ Campagna Attiva. " : "⚠ Campagna Sospesa. ";
+    let text = isActive ? t('newCampaign.active') : t('newCampaign.paused');
 
     if (type === 'single') {
-      text += `Invio singolo previsto il ${singleDate || '--/--/--'} alle ${singleTime || '--:--'}.`;
+      text += t('newCampaign.singleDesc')
+        .replace('{date}', singleDate || '--/--/--')
+        .replace('{time}', singleTime || '--:--');
     } else {
-      text += `Invio ricorrente (${recurrenceCount} volte al ${recurrenceUnit === 'day' ? 'giorno' : recurrenceUnit === 'week' ? 'settimana' : 'mese'}). `;
-      if (recurrenceUnit === 'day') text += `Orari: ${dailyTimes.join(', ')}.`;
-      if (recurrenceUnit === 'week') text += `Giorni: ${weeklySlots.map(s => `${s.day} ${s.time}`).join(', ')}.`;
-      if (recurrenceUnit === 'month') text += `Giorni del mese: ${monthlySlots.map(s => `Giorno ${s.day} ore ${s.time}`).join(', ')}.`;
+      const unitLabel = recurrenceUnit === 'day' ? t('common.day') : recurrenceUnit === 'week' ? t('common.week') : t('common.month');
+      text += t('newCampaign.recurringDesc')
+        .replace('{count}', recurrenceCount.toString())
+        .replace('{unit}', unitLabel);
+      
+      if (recurrenceUnit === 'day') text += ` ${t('newCampaign.times')}: ${dailyTimes.join(', ')}.`;
+      if (recurrenceUnit === 'week') text += ` ${t('newCampaign.days')}: ${weeklySlots.map(s => `${s.day} ${s.time}`).join(', ')}.`;
+      if (recurrenceUnit === 'month') text += ` ${t('newCampaign.days')}: ${monthlySlots.map(s => `${t('newCampaign.day')} ${s.day} ${s.time}`).join(', ')}.`;
     }
 
     if (conditions.length > 0) {
-      text += ` Attivazione condizionale impostata su ${conditions.length} regole.`;
+      text += ` ${t('newCampaign.autoTriggersSet').replace('{count}', conditions.length.toString())}`;
     }
 
     return text;
@@ -421,19 +507,19 @@ export default function App() {
 
   const handleSendCampaign = (status: Campaign['status']) => {
     if (!newCampaign.name || !newCampaign.message) {
-      return alert("Completa il nome e il messaggio della campagna.");
+      return alert(t('newCampaign.errors.incomplete'));
     }
 
     // Validation for schedules
     if (status === 'Programmata' && newCampaign.schedule) {
       const s = newCampaign.schedule;
       if (s.type === 'single' && (!s.singleDate || !s.singleTime)) {
-        return alert("Inserisci data e ora per l'invio singolo.");
+        return alert(t('newCampaign.errors.singleDateTime'));
       }
       if (s.type === 'recurring') {
-        if (s.recurrenceUnit === 'day' && s.dailyTimes.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} orari per l'invio giornaliero.`);
-        if (s.recurrenceUnit === 'week' && s.weeklySlots.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} slot settimanali.`);
-        if (s.recurrenceUnit === 'month' && s.monthlySlots.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} slot mensili.`);
+        if (s.recurrenceUnit === 'day' && s.dailyTimes.length < s.recurrenceCount) return alert(t('newCampaign.errors.dailyTimes').replace('{count}', s.recurrenceCount.toString()));
+        if (s.recurrenceUnit === 'week' && s.weeklySlots.length < s.recurrenceCount) return alert(t('newCampaign.errors.weeklySlots').replace('{count}', s.recurrenceCount.toString()));
+        if (s.recurrenceUnit === 'month' && s.monthlySlots.length < s.recurrenceCount) return alert(t('newCampaign.errors.monthlySlots').replace('{count}', s.recurrenceCount.toString()));
       }
     }
 
@@ -451,7 +537,7 @@ export default function App() {
 
     setCampaigns(prev => [campaign, ...prev]);
     setActiveSubTab('tutte');
-    alert(settings.whatsappConnected ? "Campagna inviata/programmata!" : "Modalità Test: Campagna salvata come 'Simulata'.");
+    alert(settings.whatsappConnected ? t('newCampaign.sendSuccess') : t('newCampaign.testSuccess'));
     setNewCampaign({ 
       name: '', 
       message: '', 
@@ -484,7 +570,7 @@ export default function App() {
   };
 
   const handleDeleteBroadcastList = (id: string) => {
-    if (confirm("Sei sicuro di voler eliminare questa lista broadcast?")) {
+    if (confirm(t('broadcast.deleteConfirm'))) {
       setBroadcastLists(prev => prev.filter(l => l.id !== id));
     }
   };
@@ -496,6 +582,11 @@ export default function App() {
     sentMessages: campaigns.filter(c => ['Inviata', 'Simulata'].includes(c.status)).length,
     mediaCount: media.length
   };
+
+  const displayedLeads = React.useMemo(() => {
+    const filtered = filterLeads(leads, leadsSearchTerm);
+    return sortLeadsAlphabetically(filtered);
+  }, [leads, leadsSearchTerm]);
 
   return (
     <div className="flex h-screen bg-bg-page font-sans text-text-primary overflow-hidden">
@@ -520,49 +611,49 @@ export default function App() {
           <div className="px-3 space-y-1">
             <SidebarItem 
               icon={LayoutDashboard} 
-              label="Dashboard" 
+              label={t('sidebar.dashboard')} 
               active={activeSection === 'dashboard'} 
               onClick={() => setActiveSection('dashboard')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Users} 
-              label="Lead Management" 
+              label={t('sidebar.leads')} 
               active={activeSection === 'leads'} 
               onClick={() => setActiveSection('leads')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Share2} 
-              label="Broadcast Lists" 
+              label={t('sidebar.broadcast')} 
               active={activeSection === 'broadcast'} 
               onClick={() => setActiveSection('broadcast')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Send} 
-              label="Campaign Center" 
+              label={t('sidebar.campaigns')} 
               active={activeSection === 'campaigns'} 
               onClick={() => setActiveSection('campaigns')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={ImageIcon} 
-              label="Media Library" 
+              label={t('sidebar.media')} 
               active={activeSection === 'media'} 
               onClick={() => setActiveSection('media')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Calendar} 
-              label="Marketing Calendar" 
+              label={t('sidebar.calendar')} 
               active={activeSection === 'calendar'} 
               onClick={() => setActiveSection('calendar')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Sparkles} 
-              label="AI Assistant" 
+              label={t('sidebar.ai')} 
               active={activeSection === 'ai'} 
               onClick={() => setActiveSection('ai')} 
               collapsed={!sidebarOpen}
@@ -572,25 +663,55 @@ export default function App() {
 
           <div className="mt-8 px-6 mb-2">
             <p className={`text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] transition-opacity ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`}>
-              Business & Tools
+              {t('sidebar.businessTools')}
             </p>
           </div>
 
           <div className="px-3 space-y-1">
             <SidebarItem 
               icon={History} 
-              label="Activity Log" 
+              label={t('sidebar.reports')} 
               active={activeSection === 'reports'} 
               onClick={() => setActiveSection('reports')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
               icon={Settings} 
-              label="Platform Settings" 
+              label={t('sidebar.settings')} 
               active={activeSection === 'settings'} 
               onClick={() => setActiveSection('settings')} 
               collapsed={!sidebarOpen}
             />
+          </div>
+
+          {/* Language Selector */}
+          <div className="mt-8 px-3">
+            <div className={`flex flex-col gap-2 p-3 bg-gray-50 border border-border-primary rounded-lg ${!sidebarOpen ? 'items-center justify-center' : ''}`}>
+              {sidebarOpen && (
+                <div className="flex items-center gap-2 mb-1">
+                  <Globe size={12} className="text-dr7-teal" />
+                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest leading-none">{t('sidebar.language')}</p>
+                </div>
+              )}
+              <div className={`flex ${sidebarOpen ? 'gap-1' : 'flex-col gap-2'}`}>
+                {(['it', 'en', 'es'] as Language[]).map((lang) => (
+                  <button
+                    key={lang}
+                    onClick={() => setLanguage(lang)}
+                    className={`
+                      ${sidebarOpen ? 'flex-1 py-1.5' : 'w-8 h-8 flex items-center justify-center'}
+                      text-[10px] font-bold uppercase rounded transition-all
+                      ${language === lang 
+                        ? 'bg-dr7-teal text-white shadow-sm' 
+                        : 'bg-white text-text-secondary hover:bg-gray-100 border border-border-primary'
+                      }
+                    `}
+                  >
+                    {lang === 'it' ? 'ITA' : lang === 'en' ? 'ENG' : 'ESP'}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </nav>
 
@@ -610,14 +731,14 @@ export default function App() {
         <header className="h-16 bg-white border-b border-border-primary flex items-center justify-between px-8 z-30 shrink-0">
           <div className="flex items-center gap-4">
             <h2 className="text-sm font-bold uppercase tracking-widest text-text-secondary">
-              {activeSection.replace('-', ' ')}
+              {t('sidebar.' + activeSection)}
             </h2>
           </div>
           
           <div className="flex items-center gap-6">
             <div className="hidden md:flex items-center gap-2 bg-gray-50 border border-border-primary px-3 py-1.5 rounded-md focus-within:border-dr7-teal transition-all">
               <Search size={14} className="text-text-secondary" />
-              <input type="text" placeholder="Global search..." className="bg-transparent border-none focus:ring-0 text-xs w-48" />
+              <input type="text" placeholder={t('header.search')} className="bg-transparent border-none focus:ring-0 text-xs w-48" />
             </div>
             
             <div className="flex items-center gap-4">
@@ -628,8 +749,8 @@ export default function App() {
               <div className="h-8 w-[1px] bg-gray-200"></div>
               <div className="flex items-center gap-3">
                 <div className="text-right hidden sm:block">
-                  <p className="text-xs font-bold text-black uppercase">Dr7 Admin</p>
-                  <p className="text-[10px] text-dr7-teal font-medium">Enterprise Tier</p>
+                  <p className="text-xs font-bold text-black uppercase">{t('header.admin')}</p>
+                  <p className="text-[10px] text-dr7-teal font-medium">{t('header.enterprise')}</p>
                 </div>
                 <div className="w-8 h-8 rounded-full bg-dr7-teal-soft border border-dr7-teal/20 flex items-center justify-center text-dr7-teal font-bold text-xs shadow-inner">
                   AD
@@ -646,17 +767,17 @@ export default function App() {
             <motion.div key="broadcast" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
                 <div>
-                  <h1 className="text-3xl font-bold tracking-tight">Liste Broadcast</h1>
-                  <p className="text-text-secondary text-sm">Gestisci i gruppi di lead per le tue campagne</p>
+                  <h1 className="text-3xl font-bold tracking-tight">{t('broadcast.title')}</h1>
+                  <p className="text-text-secondary text-sm">{t('broadcast.subtitle')}</p>
                 </div>
                 <button 
                   onClick={() => {
                     setEditingBroadcastList(null);
                     setIsBroadcastListModalOpen(true);
                   }}
-                  className="btn-teal px-6 py-2.5 rounded-md font-bold text-sm flex items-center gap-2 shadow-md"
+                  className="btn-teal px-6 py-2.5 rounded-md font-bold text-sm flex items-center gap-2 shadow-md uppercase"
                 >
-                  <Plus size={18} /> CREA LISTA
+                  <Plus size={18} /> {t('broadcast.create')}
                 </button>
               </div>
 
@@ -666,14 +787,14 @@ export default function App() {
                     <Share2 size={32} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-lg">Nessuna lista broadcast</h3>
-                    <p className="text-text-secondary text-sm max-w-xs mx-auto">Crea una lista broadcast per inviare campagne a gruppi predefiniti di lead.</p>
+                    <h3 className="font-bold text-lg">{t('broadcast.noLists')}</h3>
+                    <p className="text-text-secondary text-sm max-w-xs mx-auto">{t('broadcast.noListsDesc')}</p>
                   </div>
                   <button 
                     onClick={() => setIsBroadcastListModalOpen(true)}
                     className="text-dr7-teal font-bold text-xs uppercase tracking-widest hover:underline"
                   >
-                    Crea la tua prima lista
+                    {t('broadcast.createFirst')}
                   </button>
                 </div>
               ) : (
@@ -704,14 +825,14 @@ export default function App() {
                       </div>
                       <div>
                         <h4 className="font-bold text-black uppercase tracking-tight text-sm mb-1">{list.name}</h4>
-                        <p className="text-xs text-text-secondary line-clamp-1 h-4">{list.description || 'Nessuna descrizione'}</p>
+                        <p className="text-xs text-text-secondary line-clamp-1 h-4">{list.description || t('broadcast.none')}</p>
                       </div>
                       <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center">
                         <div className="flex items-center gap-1.5">
                           <Users size={14} className="text-text-secondary" />
-                          <span className="text-xs font-black text-black">{list.leadIds.length} <span className="font-medium text-text-secondary">lead</span></span>
+                          <span className="text-xs font-black text-black">{list.leadIds.length} <span className="font-medium text-text-secondary">{t('broadcast.leadCount')}</span></span>
                         </div>
-                        <span className="text-[10px] text-text-muted font-mono">{new Date(list.updatedAt).toLocaleDateString()}</span>
+                        <span className="text-[10px] text-text-muted font-mono">{t('broadcast.updated')} {new Date(list.updatedAt).toLocaleDateString()}</span>
                       </div>
                     </div>
                   ))}
@@ -728,17 +849,16 @@ export default function App() {
                </div>
              </motion.div>
           )}
-
           {activeSection === 'campaigns' && activeSubTab === 'nuova' && (
             <motion.div key="nuova-campagna" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
-                <h1 className="text-3xl font-bold tracking-tight">Nuova Campagna</h1>
+                <h1 className="text-3xl font-bold tracking-tight">{t('newCampaign.titleNew')}</h1>
                 <div className="flex gap-3">
                   <button onClick={() => setActiveSubTab('tutte')} className="bg-white border border-border-primary px-5 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2">
-                    ANNULLA
+                    {t('common.cancel')}
                   </button>
                   <button onClick={() => handleSendCampaign('Bozza')} className="btn-teal px-6 py-2 content-center font-bold text-sm">
-                    SALVA BOZZA
+                    {t('newCampaign.saveDraft')}
                   </button>
                 </div>
               </div>
@@ -747,10 +867,10 @@ export default function App() {
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
                     <div>
-                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">Nome Campagna</label>
+                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">{t('newCampaign.campaignName')}</label>
                       <input 
                         type="text" 
-                        placeholder="Es. Promozione Audi Primavera 2026" 
+                        placeholder={t('newCampaign.namePlaceholder')} 
                         className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors" 
                         value={newCampaign.name}
                         onChange={e => setNewCampaign(prev => ({ ...prev, name: e.target.value }))}
@@ -758,10 +878,10 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">Messaggio WhatsApp</label>
+                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">{t('newCampaign.whatsappMessage')}</label>
                       <textarea 
                         rows={8}
-                        placeholder="Scrivi qui il corpo del messaggio..." 
+                        placeholder={t('newCampaign.messagePlaceholder')} 
                         className="w-full bg-white border border-border-primary rounded-md px-4 py-3 text-sm focus:border-dr7-teal outline-none transition-colors resize-none mb-3"
                         value={newCampaign.message}
                         onChange={e => setNewCampaign(prev => ({ ...prev, message: e.target.value }))}
@@ -783,25 +903,25 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">Destinatari</label>
+                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">{t('newCampaign.recipients')}</label>
                       <div className="flex bg-gray-100 p-1 rounded-lg border border-border-primary mb-4">
                         <button 
                           onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'all', selectedBroadcastIds: [], selectedLeadIds: [] }))}
                           className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'all' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                          All Leads
+                          {t('newCampaign.allLeads')}
                         </button>
                         <button 
                           onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'broadcast' }))}
                           className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'broadcast' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                          Broadcast
+                          {t('newCampaign.broadcast')}
                         </button>
                         <button 
                           onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'manual' }))}
                           className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'manual' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
                         >
-                          Select
+                          {t('newCampaign.select')}
                         </button>
                       </div>
 
@@ -809,12 +929,12 @@ export default function App() {
                         {newCampaign.recipientMode === 'all' && (
                           <div className="flex justify-between items-center">
                             <div>
-                              <p className="text-xs font-bold text-black uppercase tracking-tight">Tutti i Lead</p>
-                              <p className="text-[10px] text-text-secondary uppercase">Invierai a tutti i contatti nel database</p>
+                              <p className="text-xs font-bold text-black uppercase tracking-tight">{t('newCampaign.allLeads')}</p>
+                              <p className="text-[10px] text-text-secondary uppercase">{t('newCampaign.allLeadsDesc')}</p>
                             </div>
                             <div className="text-right">
                               <p className="text-xl font-black text-dr7-teal">{leads.length}</p>
-                              <p className="text-[9px] text-text-secondary font-bold uppercase">Recipients</p>
+                              <p className="text-[9px] text-text-secondary font-bold uppercase">{t('newCampaign.recipientsCount')}</p>
                             </div>
                           </div>
                         )}
@@ -823,14 +943,14 @@ export default function App() {
                           <div className="space-y-3">
                             <div className="flex justify-between items-center">
                               <div>
-                                <p className="text-xs font-bold text-black uppercase tracking-tight">Liste Broadcast</p>
-                                <p className="text-[10px] text-text-secondary uppercase">Seleziona una o più liste salvate</p>
+                                <p className="text-xs font-bold text-black uppercase tracking-tight">{t('newCampaign.broadcastLists')}</p>
+                                <p className="text-[10px] text-text-secondary uppercase">{t('newCampaign.broadcastListsDesc')}</p>
                               </div>
                               <button 
                                 onClick={() => setIsChooseBroadcastModalOpen(true)}
                                 className="px-3 py-1.5 bg-white border border-border-primary rounded text-[10px] font-bold text-dr7-teal hover:border-dr7-teal transition-all uppercase"
                               >
-                                {newCampaign.selectedBroadcastIds && newCampaign.selectedBroadcastIds.length > 0 ? 'Modifica Selezione' : 'Scegli Liste'}
+                                {newCampaign.selectedBroadcastIds && newCampaign.selectedBroadcastIds.length > 0 ? t('common.edit') : t('newCampaign.chooseLists')}
                               </button>
                             </div>
                             
@@ -847,7 +967,7 @@ export default function App() {
                                   ))}
                                 </div>
                                 <div className="flex justify-between items-center bg-dr7-teal-soft/30 p-2 rounded">
-                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">Totale Unici:</span>
+                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">{t('newCampaign.uniqueTotal')}:</span>
                                   <span className="text-sm font-black text-dr7-teal">
                                     {(() => {
                                       const selectedLists = broadcastLists.filter(bl => newCampaign.selectedBroadcastIds?.includes(bl.id));
@@ -866,21 +986,21 @@ export default function App() {
                           <div className="space-y-3">
                             <div className="flex justify-between items-center">
                               <div>
-                                <p className="text-xs font-bold text-black uppercase tracking-tight">Selezione Manuale</p>
-                                <p className="text-[10px] text-text-secondary uppercase">Scegli i lead singolarmente</p>
+                                <p className="text-xs font-bold text-black uppercase tracking-tight">{t('newCampaign.select')}</p>
+                                <p className="text-[10px] text-text-secondary uppercase">{t('newCampaign.selectLeadsDesc')}</p>
                               </div>
                               <button 
                                 onClick={() => setIsSelectLeadsModalOpen(true)}
                                 className="px-3 py-1.5 bg-white border border-border-primary rounded text-[10px] font-bold text-dr7-teal hover:border-dr7-teal transition-all uppercase"
                               >
-                                {newCampaign.selectedLeadIds && newCampaign.selectedLeadIds.length > 0 ? 'Modifica Selezione' : 'Seleziona Lead'}
+                                {newCampaign.selectedLeadIds && newCampaign.selectedLeadIds.length > 0 ? t('common.edit') : t('newCampaign.selectLeads')}
                               </button>
                             </div>
 
                             {newCampaign.selectedLeadIds && newCampaign.selectedLeadIds.length > 0 && (
                               <div className="pt-2 border-t border-gray-200">
                                 <div className="flex justify-between items-center bg-dr7-teal-soft/30 p-2 rounded">
-                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">Lead Selezionati:</span>
+                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">{t('common.selected')}:</span>
                                   <span className="text-sm font-black text-dr7-teal">{newCampaign.selectedLeadIds.length}</span>
                                 </div>
                               </div>
@@ -894,10 +1014,10 @@ export default function App() {
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
                     <div className="flex justify-between items-center bg-gray-50 -m-6 mb-6 p-6 border-b border-border-primary">
                        <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                          <Calendar size={16} className="text-dr7-teal" /> Scheduling & Automation
+                          <Calendar size={16} className="text-dr7-teal" /> {t('newCampaign.schedulingAutomation')}
                        </h3>
                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold text-text-secondary uppercase">Stato:</span>
+                          <span className="text-[10px] font-bold text-text-secondary uppercase">{t('dashboard.status')}:</span>
                           <button 
                             onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, isActive: !prev.schedule!.isActive } }))}
                             className={`px-3 py-1 rounded text-[9px] font-black uppercase transition-all ${newCampaign.schedule?.isActive ? 'bg-dr7-green text-white' : 'bg-dr7-red text-white'}`}
@@ -910,19 +1030,19 @@ export default function App() {
                     <div className="space-y-6">
                       {/* Type Selector */}
                       <div>
-                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-3 tracking-widest">Tipo Pianificazione</label>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-3 tracking-widest">{t('newCampaign.scheduleType')}</label>
                         <div className="flex bg-gray-100 p-1 rounded-md border border-border-primary">
                           <button 
                             onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, type: 'single' } }))}
                             className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded transition-all ${newCampaign.schedule?.type === 'single' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary'}`}
                           >
-                            Invio Singolo
+                            {t('newCampaign.singleSend')}
                           </button>
                           <button 
                             onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, type: 'recurring' } }))}
                             className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded transition-all ${newCampaign.schedule?.type === 'recurring' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary'}`}
                           >
-                            Invio Ricorrente
+                            {t('newCampaign.recurringSend')}
                           </button>
                         </div>
                       </div>
@@ -930,7 +1050,7 @@ export default function App() {
                       {newCampaign.schedule?.type === 'single' ? (
                         <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1">
                           <div>
-                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Data</label>
+                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('newCampaign.date')}</label>
                             <input 
                               type="date" 
                               className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal outline-none" 
@@ -939,7 +1059,7 @@ export default function App() {
                             />
                           </div>
                           <div>
-                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Ora</label>
+                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('newCampaign.time')}</label>
                             <input 
                               type="time" 
                               className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal outline-none" 
@@ -952,32 +1072,32 @@ export default function App() {
                         <div className="space-y-4 animate-in fade-in slide-in-from-top-1">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
-                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Quante volte?</label>
+                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('newCampaign.howManyTimes')}</label>
                                <select 
                                  className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm"
                                  value={newCampaign.schedule?.recurrenceCount}
                                  onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, recurrenceCount: parseInt(e.target.value) } }))}
                                >
-                                  {[1, 2, 3, 5].map(v => <option key={v} value={v}>{v} {v === 1 ? 'volta' : 'volte'}</option>)}
+                                  {[1, 2, 3, 5].map(v => <option key={v} value={v}>{v} {v === 1 ? t('newCampaign.timeUnit') : t('newCampaign.timesUnit')}</option>)}
                                </select>
                             </div>
                             <div>
-                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Cadenza</label>
+                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('newCampaign.cadence')}</label>
                                <select 
                                  className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm"
                                  value={newCampaign.schedule?.recurrenceUnit}
                                  onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, recurrenceUnit: e.target.value as any } }))}
                                >
-                                  <option value="day">Al giorno</option>
-                                  <option value="week">A settimana</option>
-                                  <option value="month">Al mese</option>
+                                  <option value="day">{t('newCampaign.perDay')}</option>
+                                  <option value="week">{t('newCampaign.perWeek')}</option>
+                                  <option value="month">{t('newCampaign.perMonth')}</option>
                                </select>
                             </div>
                           </div>
 
                           {/* Dynamic Slots based on count & unit */}
                           <div className="space-y-3 pt-2 border-t border-gray-100">
-                             <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Configura Slot di Invio</p>
+                             <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('newCampaign.configureSlots')}</p>
                              {Array.from({ length: newCampaign.schedule?.recurrenceCount || 0 }).map((_, i) => (
                                 <div key={i} className="flex gap-2 items-center">
                                    <span className="text-[10px] font-bold text-text-muted w-14">Slot #{i+1}</span>
@@ -991,19 +1111,19 @@ export default function App() {
                                          setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, weeklySlots: newSlots } }));
                                        }}
                                      >
-                                        <option value="">Seleziona Giorno</option>
+                                        <option value="">{t('newCampaign.selectDay')}</option>
                                         {['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map(d => <option key={d} value={d}>{d}</option>)}
                                      </select>
                                    )}
                                    {newCampaign.schedule?.recurrenceUnit === 'month' && (
                                      <input 
-                                       type="number" min="1" max="31" placeholder="Giorno (1-31)"
+                                       type="number" min="1" max="31" placeholder={t('newCampaign.dayPlaceholder')}
                                        className="flex-1 bg-white border border-border-primary rounded px-2 py-1.5 text-xs"
                                        value={newCampaign.schedule.monthlySlots[i]?.day || ''}
                                        onChange={e => {
-                                          const newSlots = [...newCampaign.schedule!.monthlySlots];
-                                          newSlots[i] = { day: parseInt(e.target.value), time: newSlots[i]?.time || '09:00' };
-                                          setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, monthlySlots: newSlots } }));
+                                           const newSlots = [...newCampaign.schedule!.monthlySlots];
+                                           newSlots[i] = { day: parseInt(e.target.value), time: newSlots[i]?.time || '09:00' };
+                                           setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, monthlySlots: newSlots } }));
                                        }}
                                      />
                                    )}
@@ -1034,16 +1154,16 @@ export default function App() {
                       {/* Sending Limits / Windows */}
                       <div className="pt-4 border-t border-gray-100 space-y-4">
                         <div className="flex justify-between items-center">
-                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Finestre di Invio</label>
+                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('newCampaign.sendWindows')}</label>
                            <button 
                             onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: [...prev.schedule!.allowedWindows, { start: '09:00', end: '18:00' }] } }))}
                             className="text-[9px] font-black text-dr7-teal border border-dr7-teal/20 px-2 py-1 rounded"
-                           >+ AGGIUNGI LIMITE</button>
+                           >+ {t('newCampaign.addLimit')}</button>
                         </div>
                         <div className="space-y-2">
                            {newCampaign.schedule?.allowedWindows.map((win, idx) => (
                              <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded border border-border-primary">
-                               <span className="text-[9px] font-bold text-text-muted uppercase">Consentito:</span>
+                               <span className="text-[9px] font-bold text-text-muted uppercase">{t('newCampaign.allowed')}:</span>
                                <input type="time" className="bg-transparent border-none p-0 text-xs w-16" value={win.start} onChange={e => {
                                   const nw = [...newCampaign.schedule!.allowedWindows]; nw[idx].start = e.target.value;
                                   setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: nw } }));
@@ -1064,17 +1184,17 @@ export default function App() {
                       {/* Condition Builder */}
                       <div className="pt-4 border-t border-gray-100 space-y-4">
                         <div className="flex justify-between items-center">
-                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Trigger Automatizzati (Conditional)</label>
+                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('newCampaign.autoTriggers')}</label>
                            <button 
                             onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: [...prev.schedule!.conditions, { id: Date.now().toString(), type: 'Revenue', operator: 'reaches', value: '' }] } }))}
                             className="text-[9px] font-black text-dr7-teal border border-dr7-teal/20 px-2 py-1 rounded"
-                           >+ AGGIUNGI REGOLA</button>
+                           >+ {t('newCampaign.addRule')}</button>
                         </div>
                         <div className="space-y-2">
                            {newCampaign.schedule?.conditions.map((cond, idx) => (
                              <div key={cond.id} className="p-3 bg-gray-50 border border-border-primary rounded-lg space-y-3">
                                 <div className="flex justify-between items-center">
-                                   <span className="text-[9px] font-bold text-dr7-teal uppercase">Regola #{idx+1}</span>
+                                   <span className="text-[9px] font-bold text-dr7-teal uppercase">{t('newCampaign.rule')} #{idx+1}</span>
                                    <button onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: prev.schedule!.conditions.filter(c => c.id !== cond.id) } }))}>
                                       <X size={12} className="text-dr7-red" />
                                    </button>
@@ -1084,19 +1204,19 @@ export default function App() {
                                       const nc = [...newCampaign.schedule!.conditions]; nc[idx].type = e.target.value as any;
                                       setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
                                    }}>
-                                      <option value="Revenue">Entrate (Revenue)</option>
-                                      <option value="Vehicle availability">Auto Disponibile</option>
-                                      <option value="Lead count">Conteggio Lead</option>
+                                      <option value="Revenue">{t('newCampaign.revenue')}</option>
+                                      <option value="Vehicle availability">{t('newCampaign.vehicleAvailability')}</option>
+                                      <option value="Lead count">{t('newCampaign.leadCountShort')}</option>
                                    </select>
                                    <select className="text-[10px] font-bold bg-white border border-border-primary px-1 py-1 rounded" value={cond.operator} onChange={e => {
                                       const nc = [...newCampaign.schedule!.conditions]; nc[idx].operator = e.target.value as any;
                                       setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
                                    }}>
-                                      <option value="reaches">Raggiunge</option>
-                                      <option value="greater than">&gt; di</option>
-                                      <option value="is free for more than">Libera da &gt;</option>
+                                      <option value="reaches">{t('newCampaign.reaches')}</option>
+                                      <option value="greater than">&gt; {t('common.of')}</option>
+                                      <option value="is free for more than">{t('newCampaign.isFreeFor')}</option>
                                    </select>
-                                   <input type="text" placeholder="Valore..." className="text-[10px] bg-white border border-border-primary px-2 py-1 rounded" value={cond.value} onChange={e => {
+                                   <input type="text" placeholder={t('newCampaign.valuePlaceholder')} className="text-[10px] bg-white border border-border-primary px-2 py-1 rounded" value={cond.value} onChange={e => {
                                       const nc = [...newCampaign.schedule!.conditions]; nc[idx].value = e.target.value;
                                       setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
                                    }} />
@@ -1110,7 +1230,7 @@ export default function App() {
                       <div className="bg-dr7-teal-soft p-4 rounded-lg border border-dr7-teal/20">
                          <div className="flex items-center gap-2 mb-2">
                            <MessageSquare size={14} className="text-dr7-teal" />
-                           <p className="text-[10px] font-black uppercase text-dr7-teal">Riepilogo Logica</p>
+                           <p className="text-[10px] font-black uppercase text-dr7-teal">{t('newCampaign.logicSummary')}</p>
                          </div>
                          <p className="text-xs text-dr7-teal leading-relaxed font-medium">
                             {getScheduleSummary(newCampaign.schedule)}
@@ -1122,7 +1242,7 @@ export default function App() {
                           onClick={() => handleSendCampaign('Programmata')} 
                           className="w-full bg-[#16A34A] hover:bg-dr7-green text-white font-black text-xs py-3 px-4 rounded-md transition-all shadow-md uppercase tracking-tight"
                         >
-                          CONFERMA E PROGRAMMA CAMPAGNA
+                          {t('newCampaign.confirmSchedule')}
                         </button>
                       </div>
                     </div>
@@ -1132,7 +1252,7 @@ export default function App() {
                 <div className="space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm overflow-hidden">
                     <div className="p-4 border-b border-border-primary bg-gray-50 flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-text-secondary uppercase">Preview WhatsApp</span>
+                      <span className="text-[10px] font-bold text-text-secondary uppercase">{t('newCampaign.whatsappPreview')}</span>
                       <Bell size={14} className="text-gray-400" />
                     </div>
                     <div className="p-6 bg-[#E5DDD5] min-h-[400px] flex flex-col gap-4 relative">
@@ -1145,25 +1265,25 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="bg-white/50 p-3 rounded-lg rounded-tl-none shadow-sm max-w-[85%] text-xs relative italic text-gray-500">
-                          Inizia a scrivere per l'anteprima...
+                          {t('newCampaign.previewStart')}
                         </div>
                       )}
                     </div>
                   </div>
 
                   <div className="bg-[#2C8F7B] text-white p-6 rounded-lg shadow-md space-y-4">
-                    <h4 className="font-bold text-sm uppercase">Resoconto Campagna</h4>
+                    <h4 className="font-bold text-sm uppercase">{t('newCampaign.summary')}</h4>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between border-b border-white/20 pb-2">
-                        <span className="opacity-80">Destinatari:</span>
+                        <span className="opacity-80">{t('newCampaign.recipients')}:</span>
                         <span className="font-bold italic">{leads.length}</span>
                       </div>
                     </div>
                     <button onClick={() => handleSendCampaign('Inviata')} className="w-full bg-white text-dr7-teal font-black text-xs py-4 rounded-md shadow-lg flex items-center justify-center gap-2 group hover:bg-gray-100 transition-all">
-                      {settings.whatsappConnected ? 'INVIA ORA' : 'INVIA TEST SIMULATO'} <Send size={14} className="group-hover:translate-x-1 transition-transform" />
+                      {settings.whatsappConnected ? t('newCampaign.sendNow') : t('newCampaign.sendTest')} <Send size={14} className="group-hover:translate-x-1 transition-transform" />
                     </button>
                     {!settings.whatsappConnected && (
-                       <p className="text-[9px] uppercase font-black text-center opacity-70 tracking-tighter">Provider WhatsApp non collegato</p>
+                       <p className="text-[9px] uppercase font-black text-center opacity-70 tracking-tighter">{t('newCampaign.providerNotConnected')}</p>
                     )}
                   </div>
                 </div>
@@ -1175,25 +1295,25 @@ export default function App() {
             <motion.div key="lista-campagne" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               {/* Page Title Bar */}
               <div className="flex justify-between items-end">
-                <h1 className="text-3xl font-bold tracking-tight">Campagne</h1>
+                <h1 className="text-3xl font-bold tracking-tight">{t('campaigns.title')}</h1>
                 <button onClick={() => setActiveSubTab('nuova')} className="btn-teal px-6 py-2 content-center font-bold text-sm">
-                  + NUOVA CAMPAGNA
+                  + {t('campaigns.new')}
                 </button>
               </div>
 
               {/* Section Tabs (Segmented Control Style) */}
               <div className="w-full flex bg-gray-100 p-1 rounded-lg border border-border-primary">
-                <SectionTab label="Tutte le Campagne" active={activeSubTab === 'tutte'} onClick={() => setActiveSubTab('tutte')} />
-                <SectionTab label="Invii Programmati" active={activeSubTab === 'programmati'} onClick={() => setActiveSubTab('programmati')} />
-                <SectionTab label="Report d'Invio" active={activeSubTab === 'report'} onClick={() => setActiveSubTab('report')} />
+                <SectionTab label={t('campaigns.all')} active={activeSubTab === 'tutte'} onClick={() => setActiveSubTab('tutte')} />
+                <SectionTab label={t('sidebar.reports')} active={activeSubTab === 'programmati'} onClick={() => setActiveSubTab('programmati')} />
+                <SectionTab label={t('sidebar.reports')} active={activeSubTab === 'report'} onClick={() => setActiveSubTab('report')} />
               </div>
 
               {/* Filter Pills */}
               <div className="flex gap-2 items-center flex-wrap">
-                <FilterPill label="Tutte" count={campaigns.length} active />
-                <FilterPill label="Bozza" count={campaigns.filter(c => c.status === 'Bozza').length} />
-                <FilterPill label="Programmata" count={campaigns.filter(c => c.status === 'Programmata').length} />
-                <FilterPill label="Inviata" count={campaigns.filter(c => c.status === 'Inviata').length} />
+                <FilterPill label={t('campaigns.all')} count={campaigns.length} active />
+                <FilterPill label={t('status.draft')} count={campaigns.filter(c => c.status === 'Bozza').length} />
+                <FilterPill label={t('status.scheduled')} count={campaigns.filter(c => c.status === 'Programmata').length} />
+                <FilterPill label={t('status.sent')} count={campaigns.filter(c => c.status === 'Inviata').length} />
               </div>
 
               {/* Operational Data Table */}
@@ -1202,12 +1322,12 @@ export default function App() {
                   <table className="w-full text-left">
                     <thead className="bg-[#FAFAFA] border-b border-border-primary">
                       <tr>
-                        <th className="table-header">Dati Campagna</th>
-                        <th className="table-header">Data Creazione</th>
-                        <th className="table-header">Target</th>
-                        <th className="table-header">Tipo Contenuto</th>
-                        <th className="table-header">Stato</th>
-                        <th className="table-header text-right">Azioni</th>
+                        <th className="table-header">{t('campaigns.tableHeaders.campaign')}</th>
+                        <th className="table-header">{t('campaigns.tableHeaders.schedule')}</th>
+                        <th className="table-header">{t('campaigns.tableHeaders.recipients')}</th>
+                        <th className="table-header">{t('campaigns.tableHeaders.media')}</th>
+                        <th className="table-header">{t('campaigns.tableHeaders.status')}</th>
+                        <th className="table-header text-right">{t('leads.actions')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border-primary text-sm font-medium">
@@ -1243,11 +1363,11 @@ export default function App() {
                       <Send size={32} />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-black">Nessuna campagna</h3>
-                      <p className="text-sm text-text-secondary max-w-sm">Crea la tua prima campagna per iniziare a comunicare con i tuoi lead su WhatsApp.</p>
+                      <h3 className="text-lg font-bold text-black">{t('campaigns.noCampaigns')}</h3>
+                      <p className="text-sm text-text-secondary max-w-sm">{t('campaigns.noCampaignsDesc')}</p>
                     </div>
                     <button onClick={() => setActiveSubTab('nuova')} className="btn-teal px-6 py-2">
-                       Inizia ora
+                       {t('campaigns.startNow')}
                     </button>
                   </div>
                 )}
@@ -1259,42 +1379,42 @@ export default function App() {
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
               <div className="flex justify-between items-end">
                 <div>
-                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">Panoramica Sistema</p>
-                  <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">{t('dashboard.subtitle')}</p>
+                  <h1 className="text-3xl font-bold tracking-tight">{t('dashboard.title')}</h1>
                 </div>
                 <div className="flex gap-3">
                   <label className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all cursor-pointer shadow-sm">
-                     <FileUp size={14} /> Importa Lead
+                     <FileUp size={14} /> {t('leads.import')}
                      <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
                   </label>
                   <button onClick={() => { setActiveSection('campaigns'); setActiveSubTab('nuova'); }} className="btn-teal px-6 py-2 content-center font-bold text-sm">
-                    + NUOVA CAMPAGNA
+                    + {t('campaigns.new')}
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard label="Totale Lead" value={dashboardStats.totalLeads.toLocaleString()} subValue="Reali nel database" icon={Users} />
-                <StatCard label="Campagne Attive" value={dashboardStats.activeCampaigns.toString()} subValue="In programmazione" icon={Send} />
-                <StatCard label="Messaggi Inviati" value={dashboardStats.sentMessages.toLocaleString()} subValue={settings.testMode ? "Modalità Test" : "100% Successo"} icon={CheckCircle2} />
-                <StatCard label="Media in Libreria" value={dashboardStats.mediaCount.toString()} subValue="Asset caricati" icon={ImageIcon} />
+                <StatCard label={t('dashboard.totalLeads')} value={dashboardStats.totalLeads.toLocaleString()} subValue={t('dashboard.realInDb')} icon={Users} />
+                <StatCard label={t('dashboard.activeCampaigns')} value={dashboardStats.activeCampaigns.toString()} subValue={t('dashboard.scheduled')} icon={Send} />
+                <StatCard label={t('dashboard.messagesSent')} value={dashboardStats.sentMessages.toLocaleString()} subValue={settings.testMode ? t('dashboard.testMode') : t('dashboard.successRate')} icon={CheckCircle2} />
+                <StatCard label={t('dashboard.mediaAssets')} value={dashboardStats.mediaCount.toString()} subValue={t('dashboard.assetsUploaded')} icon={ImageIcon} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-white border border-border-primary rounded-lg shadow-sm">
                   <div className="p-4 border-b border-border-primary flex justify-between items-center bg-[#FAFAFA]">
-                    <h3 className="font-bold text-sm uppercase tracking-tight">Ultimi Invii Effettuati</h3>
-                    <button onClick={() => setActiveSection('campaigns')} className="text-dr7-teal text-xs font-bold hover:underline">Vedi Tutti</button>
+                    <h3 className="font-bold text-sm uppercase tracking-tight">{t('dashboard.recentCampaigns')}</h3>
+                    <button onClick={() => setActiveSection('campaigns')} className="text-dr7-teal text-xs font-bold hover:underline">{t('dashboard.viewAll')}</button>
                   </div>
                   <div className="overflow-x-auto min-h-[150px] flex flex-col justify-center">
                     {campaigns.length > 0 ? (
                       <table className="w-full text-left text-xs text-medium">
                         <thead>
                           <tr className="bg-gray-50 border-b border-border-primary">
-                            <th className="p-3 font-semibold text-text-secondary uppercase">Campagna</th>
-                            <th className="p-3 font-semibold text-text-secondary uppercase">Data</th>
-                            <th className="p-3 font-semibold text-text-secondary uppercase">Target</th>
-                            <th className="p-3 font-semibold text-text-secondary uppercase text-right">Stato</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase">{t('dashboard.name')}</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase">{t('dashboard.date')}</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase">{t('dashboard.target')}</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase text-right">{t('dashboard.status')}</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border-primary italic">
@@ -1303,40 +1423,40 @@ export default function App() {
                               key={c.id} 
                               name={c.name} 
                               date={new Date(c.createdAt).toLocaleDateString()} 
-                              targetLabel={c.recipientMode === 'all' ? 'Tutti i lead' : c.recipientMode === 'broadcast' ? 'Broadcast' : 'Manuale'} 
-                              status={c.status} 
+                              targetLabel={c.recipientMode === 'all' ? t('newCampaign.allLeads') : c.recipientMode === 'broadcast' ? t('newCampaign.broadcast') : t('newCampaign.select')} 
+                              status={t(`status.${c.status.toLowerCase()}`)} 
                             />
                           ))}
                         </tbody>
                       </table>
                     ) : (
                       <div className="text-center py-10 space-y-2">
-                        <p className="text-sm font-bold text-text-secondary">Nessuna campagna ancora creata.</p>
-                        <p className="text-xs text-text-muted">Crea la tua prima campagna per visualizzare le statistiche.</p>
+                        <p className="text-sm font-bold text-text-secondary">{t('dashboard.noCampaigns')}</p>
+                        <p className="text-xs text-text-muted">{t('campaigns.createFirst')}</p>
                       </div>
                     )}
                   </div>
                 </div>
 
                 <div className="bg-white border border-border-primary rounded-lg shadow-sm p-4 space-y-4 text-xs font-bold">
-                  <h3 className="font-bold text-sm uppercase tracking-tight border-b border-border-primary pb-3">Status Business API</h3>
+                  <h3 className="font-bold text-sm uppercase tracking-tight border-b border-border-primary pb-3">{t('dashboard.businessApiStatus')}</h3>
                   <div className="space-y-4">
                     <div className="flex justify-between items-start">
                       <div>
                         <p>{settings.companyName}</p>
-                        <p className="text-[10px] text-text-secondary">{settings.whatsappConnected ? "+971 50 123 4567" : "Canale non collegato"}</p>
+                        <p className="text-[10px] text-text-secondary">{settings.whatsappConnected ? "+971 50 123 4567" : t('dashboard.channelNotConnected')}</p>
                       </div>
                       <span className={`px-2 py-0.5 text-white text-[9px] font-bold rounded uppercase ${settings.whatsappConnected ? 'bg-dr7-green' : 'bg-dr7-red'}`}>
-                        {settings.whatsappConnected ? 'Connesso' : 'Disconnesso'}
+                        {settings.whatsappConnected ? t('status.connected') : t('status.disconnected')}
                       </span>
                     </div>
                     {!settings.whatsappConnected && (
                       <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded text-[11px] text-dr7-teal">
-                        Configura il provider nelle impostazioni per abilitare l'invio reale.
+                        {t('dashboard.configureProvider')}
                       </div>
                     )}
                     <div className="p-3 bg-gray-50 border border-border-primary rounded text-[10px] text-text-secondary space-y-1">
-                      <p className="uppercase">Informazioni Provider</p>
+                      <p className="uppercase">{t('dashboard.providerInfo')}</p>
                       <p className="font-normal">WABA Enterprise Connector</p>
                       <p className="font-normal">Quota: 250k / mese</p>
                     </div>
@@ -1350,14 +1470,14 @@ export default function App() {
           {activeSection === 'leads' && (
             <motion.div key="leads" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
-                <h1 className="text-3xl font-bold tracking-tight">Gestione Lead</h1>
+                <h1 className="text-3xl font-bold tracking-tight">{t('leads.title')}</h1>
                 <div className="flex gap-3">
                   <label className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all cursor-pointer">
-                    <FileUp size={14} /> IMPORTA LEAD
+                    <FileUp size={14} /> {t('leads.import')}
                     <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
                   </label>
                   <button onClick={() => setIsLeadModalOpen(true)} className="btn-teal px-6 py-2 content-center font-bold text-sm">
-                    + NUOVO LEAD
+                    + {t('leads.create')}
                   </button>
                 </div>
               </div>
@@ -1366,7 +1486,13 @@ export default function App() {
                 <div className="p-4 border-b border-border-primary flex gap-4 bg-[#FAFAFA]">
                   <div className="flex-1 bg-white border border-border-primary rounded-md px-3 py-1.5 flex items-center gap-2 focus-within:border-dr7-teal transition-colors">
                     <Search size={16} className="text-text-muted" />
-                    <input type="text" placeholder="Cerca per nome, numero o tag..." className="bg-transparent border-none focus:ring-0 text-sm w-full" />
+                    <input 
+                      type="text" 
+                      placeholder={t('leads.searchPlaceholder')} 
+                      className="bg-transparent border-none focus:ring-0 text-sm w-full" 
+                      value={leadsSearchTerm}
+                      onChange={(e) => setLeadsSearchTerm(e.target.value)}
+                    />
                   </div>
                   <button className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2">
                     <Filter size={14} /> Filtri
@@ -1374,20 +1500,20 @@ export default function App() {
                 </div>
                 
                 <div className="overflow-x-auto min-h-[300px] flex flex-col">
-                  {leads.length > 0 ? (
+                  {displayedLeads.length > 0 ? (
                     <table className="w-full text-left">
                       <thead className="bg-[#FAFAFA] border-b border-border-primary">
-                        <tr>
-                          <th className="table-header">Anagrafica</th>
-                          <th className="table-header">Canale WhatsApp</th>
-                          <th className="table-header">Liste / Segmenti</th>
-                          <th className="table-header">Consenso</th>
-                          <th className="table-header">Data Import</th>
-                          <th className="table-header text-right">Azioni</th>
-                        </tr>
+                <tr>
+                  <th className="table-header">{t('leads.name')}</th>
+                  <th className="table-header">{t('leads.phone')}</th>
+                  <th className="table-header">{t('leads.segment')}</th>
+                  <th className="table-header">{t('leads.consent')}</th>
+                  <th className="table-header">{t('leads.date')}</th>
+                  <th className="table-header text-right">{t('leads.actions')}</th>
+                </tr>
                       </thead>
                       <tbody className="divide-y divide-border-primary text-sm font-medium">
-                        {leads.map(lead => (
+                        {displayedLeads.map(lead => (
                           <LeadTableRow 
                             key={lead.id} 
                             name={`${lead.firstName} ${lead.lastName}`} 
@@ -1404,16 +1530,22 @@ export default function App() {
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center py-20 text-center space-y-4">
                       <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100">
-                        <Users size={32} />
+                        {leadsSearchTerm ? <Search size={32} /> : <Users size={32} />}
                       </div>
                       <div>
-                        <h3 className="text-lg font-bold text-black">Nessun lead importato</h3>
-                        <p className="text-sm text-text-secondary max-w-sm">Carica un file CSV per iniziare a costruire il tuo database di contatti per le campagne.</p>
+                        <h3 className="text-lg font-bold text-black">
+                          {leadsSearchTerm ? t('leads.noLeads') : 'Nessun lead importato'}
+                        </h3>
+                        <p className="text-sm text-text-secondary max-w-sm">
+                          {leadsSearchTerm ? '' : 'Carica un file CSV per iniziare a costruire il tuo database di contatti per le campagne.'}
+                        </p>
                       </div>
-                      <label className="btn-teal px-6 py-2 cursor-pointer">
-                        Carica il tuo primo CSV
-                        <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
-                      </label>
+                      {!leadsSearchTerm && (
+                        <label className="btn-teal px-6 py-2 cursor-pointer">
+                          Carica il tuo primo CSV
+                          <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
+                        </label>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1432,15 +1564,15 @@ export default function App() {
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
-                    <h3 className="font-bold text-sm uppercase tracking-tight">Ottimizzatore Copy</h3>
+                    <h3 className="font-bold text-sm uppercase tracking-tight">{t('sidebar.ai')} - Ottimizzatore Copy</h3>
                     <textarea 
                       rows={6} 
                       className="w-full bg-white border border-border-primary rounded-md px-4 py-3 text-sm focus:border-dr7-teal outline-none transition-colors resize-none font-medium" 
-                      placeholder="Inserisci il tuo messaggio per l'ottimizzazione..."
+                      placeholder={t('newCampaign.messagePlaceholder')}
                     />
                     <div className="flex flex-wrap gap-2">
                        <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">
-                          {settings.geminiConnected ? 'Rendi Persuasivo' : 'Simula Ottimizzazione'}
+                          {settings.geminiConnected ? t('newCampaign.aiImprove') : 'Simula Ottimizzazione'}
                        </button>
                        <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">
                           {settings.geminiConnected ? 'Check Spam' : 'Simula Check Spam'}
@@ -1465,13 +1597,13 @@ export default function App() {
             </motion.div>
           )}
 
-          {activeSection === 'lists' && (
+          {activeSection === 'media' && (
             <motion.div key="media" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
-                <h1 className="text-3xl font-bold tracking-tight">Media Library</h1>
+                <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.media')}</h1>
                 <div className="flex gap-3">
                   <label className="btn-teal px-6 py-2 cursor-pointer flex items-center gap-2">
-                    <Plus size={16} /> CARICA MEDIA
+                    <Plus size={16} /> {t('common.save').toUpperCase()} MEDIA
                     <input 
                       type="file" 
                       accept="image/*,video/*" 
@@ -1524,8 +1656,8 @@ export default function App() {
                       <ImageIcon size={32} />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-black">Nessun media caricato</h3>
-                      <p className="text-sm text-text-secondary max-w-sm">Carica immagini o video per utilizzarli nelle tue campagne WhatsApp.</p>
+                      <h3 className="text-lg font-bold text-black">{t('dashboard.noCampaigns')}</h3>
+                      <p className="text-sm text-text-secondary max-w-sm">{t('campaigns.noCampaignsDesc')}</p>
                     </div>
                   </div>
                 )}
@@ -1535,7 +1667,7 @@ export default function App() {
 
           {activeSection === 'reports' && (
             <motion.div key="reports" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-              <h1 className="text-3xl font-bold tracking-tight">Report e Analisi</h1>
+              <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.reports')}</h1>
               
               {campaigns.filter(c => ['Inviata', 'Simulata'].includes(c.status)).length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
@@ -1549,7 +1681,7 @@ export default function App() {
                    </div>
                    <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
                       <p className="text-[10px] font-bold text-text-secondary uppercase">Test Mode</p>
-                      <p className="text-3xl font-black text-dr7-red">{settings.testMode ? 'SI' : 'NO'}</p>
+                      <p className="text-3xl font-black text-dr7-red">{settings.testMode ? t('common.save').toUpperCase() : t('common.none').toUpperCase()}</p>
                    </div>
                 </div>
               ) : (
@@ -1558,8 +1690,8 @@ export default function App() {
                       <History size={32} />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-black">Nessun report disponibile</h3>
-                      <p className="text-sm text-text-secondary max-w-sm mx-auto">Le statistiche di performance appariranno qui dopo l'invio delle prime campagne reali o di test.</p>
+                      <h3 className="text-lg font-bold text-black">{t('dashboard.noCampaigns')}</h3>
+                      <p className="text-sm text-text-secondary max-w-sm mx-auto">{t('campaigns.noCampaignsDesc')}</p>
                     </div>
                 </div>
               )}
@@ -1568,17 +1700,17 @@ export default function App() {
 
           {activeSection === 'calendar' && (
             <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-               <h1 className="text-3xl font-bold tracking-tight">Marketing Calendar</h1>
+               <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.calendar')}</h1>
                <div className="bg-white border border-border-primary rounded-lg p-20 text-center space-y-4 shadow-sm">
                     <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100 mx-auto">
                       <Calendar size={32} />
                     </div>
                     <div>
-                      <h3 className="text-lg font-bold text-black">Calendario vuoto</h3>
-                      <p className="text-sm text-text-secondary max-w-sm mx-auto">Le campagne programmate appariranno qui. Programma la tua prima campagna ora.</p>
+                      <h3 className="text-lg font-bold text-black">{t('dashboard.noCampaigns')}</h3>
+                      <p className="text-sm text-text-secondary max-w-sm mx-auto">{t('campaigns.noCampaignsDesc')}</p>
                     </div>
                     <button onClick={() => { setActiveSection('campaigns'); setActiveSubTab('nuova'); }} className="btn-teal px-6 py-2">
-                       Aggiungi Evento
+                       {t('campaigns.new')}
                     </button>
                 </div>
             </motion.div>
@@ -1587,8 +1719,8 @@ export default function App() {
             <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
               <div className="flex justify-between items-end">
                 <div>
-                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">Configurazione Piattaforma</p>
-                  <h1 className="text-3xl font-bold tracking-tight">Impostazioni</h1>
+                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">{t('settings.platformConfig')}</p>
+                  <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.settings')}</h1>
                 </div>
                 <button 
                   onClick={() => {
@@ -1597,7 +1729,7 @@ export default function App() {
                   }}
                   className="bg-dr7-red text-white px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-red-600 transition-all"
                 >
-                  <Trash2 size={14} /> RESET COMPLETO DATI
+                  <Trash2 size={14} /> {t('settings.resetData')}
                 </button>
               </div>
 
@@ -1605,11 +1737,11 @@ export default function App() {
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
                     <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                       <Settings size={16} className="text-dr7-teal" /> Profilo Aziendale
+                       <Settings size={16} className="text-dr7-teal" /> {t('settings.companyProfile')}
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Nome Azienda</label>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('settings.companyName')}</label>
                         <input 
                           type="text" 
                           className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal focus:ring-0 outline-none" 
@@ -1618,7 +1750,7 @@ export default function App() {
                         />
                       </div>
                       <div>
-                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Email Amministratore</label>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">{t('settings.adminEmail')}</label>
                         <input type="email" placeholder="admin@dr7.app" className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm opacity-50 cursor-not-allowed" disabled />
                       </div>
                     </div>
@@ -1626,7 +1758,7 @@ export default function App() {
 
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
                     <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                       <MessageSquare size={16} className="text-[#25D366]" /> Connessione WhatsApp
+                       <MessageSquare size={16} className="text-[#25D366]" /> {t('settings.whatsappConnection')}
                     </h3>
                     <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-border-primary">
                        <div className="flex items-center gap-4">
@@ -1635,7 +1767,7 @@ export default function App() {
                           </div>
                           <div>
                              <p className="font-bold text-sm">Official WhatsApp Business API</p>
-                             <p className="text-xs text-text-secondary">{settings.whatsappConnected ? "Connessione attiva e stabile" : "Nessun provider configurato"}</p>
+                             <p className="text-xs text-text-secondary">{settings.whatsappConnected ? t('settings.activeConnection') : t('settings.noProvider')}</p>
                           </div>
                        </div>
                        <button 
@@ -1644,23 +1776,23 @@ export default function App() {
                           settings.whatsappConnected ? 'bg-dr7-red text-white hover:bg-red-600' : 'btn-teal'
                         }`}
                        >
-                          {settings.whatsappConnected ? 'SCOLLEGA' : 'COLLEGA ORA'}
+                          {settings.whatsappConnected ? t('settings.disconnect') : t('settings.connectNow')}
                        </button>
                     </div>
                     {settings.whatsappConnected && (
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                         <div className="p-3 border border-border-primary rounded bg-white">
-                            <p className="text-[10px] font-bold text-text-secondary uppercase">API Endpoint</p>
-                            <p className="text-xs font-mono truncate">v17.0/dr7-production</p>
-                         </div>
-                         <div className="p-3 border border-border-primary rounded bg-white">
-                            <p className="text-[10px] font-bold text-text-secondary uppercase">Token Status</p>
-                            <p className="text-xs text-dr7-green font-bold">VALiD</p>
-                         </div>
-                         <div className="p-3 border border-border-primary rounded bg-white">
-                            <p className="text-[10px] font-bold text-text-secondary uppercase">Last Sync</p>
-                            <p className="text-xs">Oggi, 09:45</p>
-                         </div>
+                        <div className="p-3 border border-border-primary rounded bg-white">
+                           <p className="text-[10px] font-bold text-text-secondary uppercase">API Endpoint</p>
+                           <p className="text-xs font-mono truncate">v17.0/dr7-production</p>
+                        </div>
+                        <div className="p-3 border border-border-primary rounded bg-white">
+                           <p className="text-[10px] font-bold text-text-secondary uppercase">Token Status</p>
+                           <p className="text-xs text-dr7-green font-bold">VALiD</p>
+                        </div>
+                        <div className="p-3 border border-border-primary rounded bg-white">
+                           <p className="text-[10px] font-bold text-text-secondary uppercase">{t('settings.lastSync')}</p>
+                           <p className="text-xs">{t('settings.today')}, 09:45</p>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1669,7 +1801,7 @@ export default function App() {
                 <div className="space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-4">
                     <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
-                       <Sparkles size={16} className="text-dr7-teal" /> AI Configuration
+                       <Sparkles size={16} className="text-dr7-teal" /> {t('settings.aiConfig')}
                     </h3>
                     <div className="space-y-4">
                        <div className="flex justify-between items-center text-xs">
@@ -1679,13 +1811,13 @@ export default function App() {
                           </span>
                        </div>
                        <p className="text-[11px] text-text-secondary leading-relaxed italic">
-                          Il sistema utilizza Gemini per l'ottimizzazione del messaggio e l'analisi dei lead. Configura la chiave API nel pannello di controllo cloud.
+                          {t('settings.geminiDesc')}
                        </p>
                     </div>
                   </div>
 
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-4">
-                    <h3 className="font-bold text-sm uppercase tracking-tight">System Policy</h3>
+                    <h3 className="font-bold text-sm uppercase tracking-tight">{t('settings.systemPolicy')}</h3>
                     <div className="space-y-3">
                        <label className="flex items-center gap-3 cursor-pointer group">
                           <input 
@@ -1694,10 +1826,10 @@ export default function App() {
                             checked={settings.testMode}
                             onChange={() => setSettings((prev: any) => ({ ...prev, testMode: !prev.testMode }))}
                           />
-                          <span className="text-xs font-bold text-text-secondary group-hover:text-black transition-colors">Abilita Modalità Test</span>
+                          <span className="text-xs font-bold text-text-secondary group-hover:text-black transition-colors">{t('dashboard.testMode')}</span>
                        </label>
                        <p className="text-[10px] text-text-muted italic pl-7">
-                          In modalità test, le campagne non verranno mai inviate realmente ai destinatari.
+                          {t('settings.testModeDesc')}
                        </p>
                     </div>
                   </div>
@@ -1727,8 +1859,8 @@ export default function App() {
             >
               <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50">
                 <div>
-                  <h3 className="font-bold text-lg uppercase tracking-tight">Anteprima Importazione</h3>
-                  <p className="text-[10px] text-text-secondary uppercase">Riepilogo dati e deduplicazione automatica</p>
+                  <h3 className="font-bold text-lg uppercase tracking-tight">{t('csvImport.title')}</h3>
+                  <p className="text-[10px] text-text-secondary uppercase">{t('csvImport.preview')}</p>
                 </div>
                 <button 
                   onClick={() => setIsImportModalOpen(false)}
@@ -1742,23 +1874,23 @@ export default function App() {
                 {/* Stats Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                   <div className="p-3 bg-gray-50 border border-border-primary rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">Totale CSV</p>
+                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">{t('csvImport.total')}</p>
                     <p className="text-xl font-black">{importStats.totalRows}</p>
                   </div>
                   <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-dr7-teal uppercase mb-1">Validi</p>
+                    <p className="text-[10px] font-bold text-dr7-teal uppercase mb-1">{t('csvImport.valid')}</p>
                     <p className="text-xl font-black text-dr7-teal">{importStats.validUnique}</p>
                   </div>
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Duplicati nel file</p>
+                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">{t('csvImport.fileDupes')}</p>
                     <p className="text-xl font-black text-amber-700">{importStats.duplicatesInFile}</p>
                   </div>
                   <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Già nel database</p>
+                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">{t('csvImport.dbDupes')}</p>
                     <p className="text-xl font-black text-blue-700">{importStats.alreadyExisting}</p>
                   </div>
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-dr7-red uppercase mb-1">Invalidi</p>
+                    <p className="text-[10px] font-bold text-dr7-red uppercase mb-1">{t('csvImport.invalid')}</p>
                     <p className="text-xl font-black text-dr7-red">{importStats.invalidRows}</p>
                   </div>
                 </div>
@@ -1772,7 +1904,7 @@ export default function App() {
                         importModalTab === 'valid' ? 'text-dr7-teal border-b-2 border-dr7-teal' : 'text-text-secondary hover:text-text-primary'
                       }`}
                     >
-                      Lead da importare ({leadsToImport.length})
+                      {t('csvImport.leadsToImport')} ({leadsToImport.length})
                     </button>
                     <button 
                       onClick={() => setImportModalTab('skipped')}
@@ -1780,7 +1912,7 @@ export default function App() {
                         importModalTab === 'skipped' ? 'text-dr7-teal border-b-2 border-dr7-teal' : 'text-text-secondary hover:text-text-primary'
                       }`}
                     >
-                      Righe escluse ({skippedRows.length})
+                      {t('csvImport.excludedRows')} ({skippedRows.length})
                     </button>
                   </div>
 
@@ -1788,13 +1920,13 @@ export default function App() {
                     {importModalTab === 'valid' ? (
                       <div className="max-h-[400px] overflow-y-auto custom-scrollbar">
                         <table className="w-full text-left text-[11px]">
-                          <thead className="bg-[#FAFAFA] border-b border-border-primary sticky top-0 z-10">
+                          <thead>
                             <tr>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Nome</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Cognome</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Telefono Orig.</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Telefono Norm.</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Segmento</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">{t('leads.name')}</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">{t('leads.last_name')}</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">{t('csvImport.originalPhone')}</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">{t('csvImport.normalizedPhone')}</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">{t('leads.segment')}</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border-primary">
@@ -1847,23 +1979,23 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="p-6 bg-gray-50 border-t border-border-primary flex justify-between items-center">
+               <div className="p-6 bg-gray-50 border-t border-border-primary flex justify-between items-center">
                 <div className="text-xs text-text-secondary font-medium italic">
-                  Verranno aggiunti <strong>{leadsToImport.length}</strong> lead unici. I dati sono stati normalizzati.
+                  {t('csvImport.footerSummary').replace('{count}', leadsToImport.length.toString())}
                 </div>
                 <div className="flex gap-3">
                   <button 
                     onClick={() => setIsImportModalOpen(false)}
                     className="bg-white border border-border-primary px-6 py-2 rounded-md font-bold text-xs uppercase tracking-tight hover:bg-gray-100 transition-all shadow-sm"
                   >
-                    ANNULLA
+                    {t('common.cancel')}
                   </button>
                   <button 
                     onClick={handleConfirmImport}
                     disabled={leadsToImport.length === 0}
                     className="btn-teal px-8 py-2 rounded-md font-bold text-xs uppercase tracking-tight shadow-md disabled:opacity-50 transition-all"
                   >
-                    CONFERMA E IMPORTA
+                    {t('csvImport.confirm')}
                   </button>
                 </div>
               </div>
@@ -1882,6 +2014,7 @@ export default function App() {
             onSave={handleCreateBroadcastList}
             leads={leads}
             initialData={editingBroadcastList}
+            t={t}
           />
         )}
       </AnimatePresence>
@@ -1893,6 +2026,7 @@ export default function App() {
             broadcastLists={broadcastLists}
             selectedIds={newCampaign.selectedBroadcastIds || []}
             onConfirm={(ids) => setNewCampaign(prev => ({ ...prev, selectedBroadcastIds: ids }))}
+            t={t}
           />
         )}
       </AnimatePresence>
@@ -1905,12 +2039,13 @@ export default function App() {
             selectedIds={newCampaign.selectedLeadIds || []}
             onConfirm={(ids: string[]) => setNewCampaign(prev => ({ ...prev, selectedLeadIds: ids }))}
             onSaveAsBroadcast={(ids: string[]) => {
-              const name = prompt("Nome della Lista Broadcast:");
+              const name = prompt(t('broadcast.enterName'));
               if (name) {
-                handleCreateBroadcastList(name, "Lista creata da selezione manuale", ids);
+                handleCreateBroadcastList(name, t('broadcast.manualSelection'), ids);
                 setNewCampaign(prev => ({ ...prev, recipientMode: 'broadcast', selectedBroadcastIds: [broadcastLists[0]?.id || `bl-${Date.now()}`], selectedLeadIds: [] }));
               }
             }}
+            t={t}
           />
         )}
       </AnimatePresence>
@@ -1932,7 +2067,7 @@ export default function App() {
               className="relative w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden"
             >
               <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50">
-                <h3 className="font-bold text-lg uppercase tracking-tight">Crea Nuovo Lead</h3>
+                <h3 className="font-bold text-lg uppercase tracking-tight">{t('leads.create')}</h3>
                 <button 
                   onClick={() => setIsLeadModalOpen(false)}
                   className="p-1 hover:bg-gray-200 rounded-full text-text-secondary transition-colors"
@@ -1943,7 +2078,7 @@ export default function App() {
 
               <div className="p-6 space-y-4">
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Nome *</label>
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('leads.name')} *</label>
                   <input 
                     type="text" 
                     placeholder="Es. Mario"
@@ -1958,7 +2093,7 @@ export default function App() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Cognome</label>
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('leads.last_name')}</label>
                   <input 
                     type="text" 
                     placeholder="Es. Rossi"
@@ -1969,7 +2104,7 @@ export default function App() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">WhatsApp / Cellulare *</label>
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('leads.phone')} *</label>
                   <input 
                     type="text" 
                     placeholder="Es. +39 333 1234567"
@@ -1989,13 +2124,13 @@ export default function App() {
                   onClick={() => setIsLeadModalOpen(false)}
                   className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-tight hover:bg-gray-100 transition-all"
                 >
-                  Annulla
+                  {t('common.cancel')}
                 </button>
                 <button 
                   onClick={handleCreateLead}
                   className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-tight shadow-md"
                 >
-                  Salva Lead
+                  {t('common.save')}
                 </button>
               </div>
             </motion.div>
@@ -2009,16 +2144,16 @@ export default function App() {
 
 // --- Modals for Recipients & Broadcast Lists ---
 
-function BroadcastListModal({ onClose, onSave, leads, initialData }: any) {
+function BroadcastListModal({ onClose, onSave, leads, initialData, t }: any) {
   const [name, setName] = useState(initialData?.name || '');
   const [description, setDescription] = useState(initialData?.description || '');
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(initialData?.leadIds || []);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const filteredLeads = leads.filter((l: Lead) => 
-    `${l.firstName} ${l.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    l.phoneNormalized.includes(searchTerm)
-  );
+  const displayedLeads = React.useMemo(() => {
+    const filtered = filterLeads(leads, searchTerm);
+    return sortLeadsAlphabetically(filtered);
+  }, [leads, searchTerm]);
 
   const toggleLead = (id: string) => {
     setSelectedLeadIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
@@ -2029,28 +2164,28 @@ function BroadcastListModal({ onClose, onSave, leads, initialData }: any) {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
-          <h3 className="font-bold text-lg uppercase tracking-tight">{initialData ? 'Modifica Lista' : 'Nuova Lista Broadcast'}</h3>
+          <h3 className="font-bold text-lg uppercase tracking-tight">{initialData ? t('broadcast.editList') : t('broadcast.create')}</h3>
           <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
         </div>
 
         <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1">
-              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Nome Lista *</label>
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('broadcast.listName')} *</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Es. Clienti Supercar" className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm outline-none focus:border-dr7-teal" />
             </div>
             <div className="space-y-1">
-              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Descrizione</label>
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('broadcast.description')}</label>
               <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="Es. Clienti che hanno noleggiato Ferrari" className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm outline-none focus:border-dr7-teal" />
             </div>
           </div>
 
           <div className="space-y-3">
             <div className="flex justify-between items-end">
-              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Seleziona Lead ({selectedLeadIds.length})</label>
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">{t('newCampaign.selectLeads')} ({selectedLeadIds.length})</label>
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
-                <input type="text" placeholder="Cerca lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-1.5 bg-gray-100 border border-border-primary rounded-md text-xs w-48 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
+                <input type="text" placeholder={t('leads.searchPlaceholder')} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-1.5 bg-gray-100 border border-border-primary rounded-md text-xs w-48 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
               </div>
             </div>
 
@@ -2059,16 +2194,16 @@ function BroadcastListModal({ onClose, onSave, leads, initialData }: any) {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-gray-50 border-b border-border-primary sticky top-0">
                     <tr>
-                      <th className="p-2 w-10 text-center"><input type="checkbox" checked={filteredLeads.length > 0 && filteredLeads.every((l: Lead) => selectedLeadIds.includes(l.id))} onChange={(e) => {
-                        if (e.target.checked) setSelectedLeadIds(prev => [...new Set([...prev, ...filteredLeads.map((l: Lead) => l.id)])]);
-                        else setSelectedLeadIds(prev => prev.filter(id => !filteredLeads.map((l: Lead) => l.id).includes(id)));
+                      <th className="p-2 w-10 text-center"><input type="checkbox" checked={displayedLeads.length > 0 && displayedLeads.every((l: Lead) => selectedLeadIds.includes(l.id))} onChange={(e) => {
+                        if (e.target.checked) setSelectedLeadIds(prev => [...new Set([...prev, ...displayedLeads.map((l: Lead) => l.id)])]);
+                        else setSelectedLeadIds(prev => prev.filter(id => !displayedLeads.map((l: Lead) => l.id).includes(id)));
                       }} /></th>
-                      <th className="p-2 font-bold uppercase text-text-secondary">Nome & Cognome</th>
-                      <th className="p-2 font-bold uppercase text-text-secondary">WhatsApp</th>
+                      <th className="p-2 font-bold uppercase text-text-secondary">{t('leads.name')}</th>
+                      <th className="p-2 font-bold uppercase text-text-secondary">{t('leads.phone')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-primary">
-                    {filteredLeads.map((l: Lead) => (
+                    {displayedLeads.map((l: Lead) => (
                       <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${selectedLeadIds.includes(l.id) ? 'bg-dr7-teal-soft/20' : ''}`} onClick={() => toggleLead(l.id)}>
                         <td className="p-2 w-10 text-center"><input type="checkbox" checked={selectedLeadIds.includes(l.id)} readOnly className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" /></td>
                         <td className="p-2 font-bold">{l.firstName} {l.lastName}</td>
@@ -2083,15 +2218,15 @@ function BroadcastListModal({ onClose, onSave, leads, initialData }: any) {
         </div>
 
         <div className="p-6 bg-gray-50 border-t border-border-primary flex gap-3 shrink-0">
-          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">Annulla</button>
-          <button onClick={() => name && onSave(name, description, selectedLeadIds)} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md disabled:opacity-50" disabled={!name}>Salva Lista</button>
+          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">{t('common.cancel')}</button>
+          <button onClick={() => name && onSave(name, description, selectedLeadIds)} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md disabled:opacity-50" disabled={!name}>{t('common.save')}</button>
         </div>
       </motion.div>
     </div>
   );
 }
 
-function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm }: any) {
+function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm, t }: any) {
   const [currentSelection, setCurrentSelection] = useState<string[]>(selectedIds);
 
   const toggleList = (id: string) => {
@@ -2103,7 +2238,7 @@ function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm 
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
         <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
-          <h3 className="font-bold text-lg uppercase tracking-tight">Scegli Liste Broadcast</h3>
+          <h3 className="font-bold text-lg uppercase tracking-tight">{t('newCampaign.chooseBroadcast')}</h3>
           <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
         </div>
 
@@ -2111,7 +2246,7 @@ function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm 
           {broadcastLists.length === 0 ? (
             <div className="py-12 text-center space-y-4">
               <Share2 size={32} className="mx-auto text-text-muted" />
-              <p className="text-sm text-text-secondary">Nessuna lista broadcast disponibile.</p>
+              <p className="text-sm text-text-secondary">{t('broadcast.noLists')}</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -2124,7 +2259,7 @@ function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm 
                       </div>
                       <div>
                         <p className="font-bold text-sm uppercase tracking-tight">{list.name}</p>
-                        <p className="text-[10px] text-text-secondary">{list.leadIds.length} lead</p>
+                        <p className="text-[10px] text-text-secondary">{list.leadIds.length} {t('broadcast.leadCount')}</p>
                       </div>
                     </div>
                     <span className="text-[10px] text-text-muted font-mono">{new Date(list.updatedAt).toLocaleDateString()}</span>
@@ -2136,22 +2271,22 @@ function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm 
         </div>
 
         <div className="p-6 bg-gray-50 border-t border-border-primary flex gap-3 shrink-0">
-          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">Annulla</button>
-          <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md">Conferma Selezione</button>
+          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">{t('common.cancel')}</button>
+          <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md">{t('common.confirm')}</button>
         </div>
       </motion.div>
     </div>
   );
 }
 
-function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroadcast }: any) {
+function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroadcast, t }: any) {
   const [currentSelection, setCurrentSelection] = useState<string[]>(selectedIds);
   const [searchTerm, setSearchTerm] = useState('');
 
-  const filteredLeads = leads.filter((l: Lead) => 
-    `${l.firstName} ${l.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    l.phoneNormalized.includes(searchTerm)
-  );
+  const displayedLeads = React.useMemo(() => {
+    const filtered = filterLeads(leads, searchTerm);
+    return sortLeadsAlphabetically(filtered);
+  }, [leads, searchTerm]);
 
   const toggleLead = (id: string) => {
     setCurrentSelection(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
@@ -2162,18 +2297,18 @@ function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroa
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
       <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
-          <h3 className="font-bold text-lg uppercase tracking-tight">Seleziona Lead Manualmente</h3>
+          <h3 className="font-bold text-lg uppercase tracking-tight">{t('newCampaign.selectLeads')}</h3>
           <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
         </div>
 
         <div className="p-4 bg-white border-b border-border-primary flex justify-between items-center shrink-0">
           <div className="flex items-center gap-4">
-            <span className="text-[10px] font-bold text-dr7-teal uppercase tracking-widest bg-dr7-teal-soft/30 px-3 py-1.5 rounded-full">Selezionati: {currentSelection.length}</span>
-            <button onClick={() => setCurrentSelection([])} className="text-[10px] font-bold text-text-secondary uppercase hover:text-dr7-red underline">Pulisci Tutto</button>
+            <span className="text-[10px] font-bold text-dr7-teal uppercase tracking-widest bg-dr7-teal-soft/30 px-3 py-1.5 rounded-full">{t('common.selected')}: {currentSelection.length}</span>
+            <button onClick={() => setCurrentSelection([])} className="text-[10px] font-bold text-text-secondary uppercase hover:text-dr7-red underline">{t('common.clearAll')}</button>
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
-            <input type="text" placeholder="Cerca per nome o telefono..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-2 bg-gray-100 border border-border-primary rounded-md text-xs w-64 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
+            <input type="text" placeholder={t('leads.searchPlaceholder')} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-2 bg-gray-100 border border-border-primary rounded-md text-xs w-64 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
           </div>
         </div>
 
@@ -2182,18 +2317,18 @@ function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroa
             <thead className="bg-gray-50 border-b border-border-primary sticky top-0 z-10">
               <tr>
                 <th className="p-3 w-12 text-center">
-                  <input type="checkbox" checked={filteredLeads.length > 0 && filteredLeads.every((l: Lead) => currentSelection.includes(l.id))} onChange={(e) => {
-                    if (e.target.checked) setCurrentSelection(prev => [...new Set([...prev, ...filteredLeads.map((l: Lead) => l.id)])]);
-                    else setCurrentSelection(prev => prev.filter(id => !filteredLeads.map((l: Lead) => l.id).includes(id)));
+                  <input type="checkbox" checked={displayedLeads.length > 0 && displayedLeads.every((l: Lead) => currentSelection.includes(l.id))} onChange={(e) => {
+                    if (e.target.checked) setCurrentSelection(prev => [...new Set([...prev, ...displayedLeads.map((l: Lead) => l.id)])]);
+                    else setCurrentSelection(prev => prev.filter(id => !displayedLeads.map((l: Lead) => l.id).includes(id)));
                   }} className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" />
                 </th>
-                <th className="p-3 font-bold uppercase text-text-secondary">Nome & Cognome</th>
-                <th className="p-3 font-bold uppercase text-text-secondary">WhatsApp</th>
-                <th className="p-3 font-bold uppercase text-text-secondary text-right">Segmento</th>
+                <th className="p-3 font-bold uppercase text-text-secondary">{t('leads.name')}</th>
+                <th className="p-3 font-bold uppercase text-text-secondary">{t('leads.phone')}</th>
+                <th className="p-3 font-bold uppercase text-text-secondary text-right">{t('leads.segment')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border-primary">
-              {filteredLeads.map((l: Lead) => (
+              {displayedLeads.map((l: Lead) => (
                 <tr key={l.id} className={`hover:bg-gray-50 transition-colors cursor-pointer ${currentSelection.includes(l.id) ? 'bg-dr7-teal-soft/20' : ''}`} onClick={() => toggleLead(l.id)}>
                   <td className="p-3 w-12 text-center"><input type="checkbox" checked={currentSelection.includes(l.id)} readOnly className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" /></td>
                   <td className="p-3 font-bold">{l.firstName} {l.lastName}</td>
@@ -2203,19 +2338,19 @@ function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroa
               ))}
             </tbody>
           </table>
-          {filteredLeads.length === 0 && (
+          {displayedLeads.length === 0 && (
             <div className="py-20 text-center space-y-4">
-              <Users size={32} className="mx-auto text-text-muted opacity-30" />
-              <p className="text-sm text-text-secondary italic">Nessun lead trovato con i criteri di ricerca.</p>
+              <Search size={32} className="mx-auto text-text-muted opacity-30" />
+              <p className="text-sm text-text-secondary italic">{t('leads.noLeads')}</p>
             </div>
           )}
         </div>
 
         <div className="p-6 bg-gray-50 border-t border-border-primary flex flex-col md:flex-row gap-3 shrink-0">
-          <button onClick={() => { onSaveAsBroadcast(currentSelection); onClose(); }} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:text-dr7-teal transition-all shadow-sm" disabled={currentSelection.length === 0}>Salva come Lista Broadcast</button>
+          <button onClick={() => { onSaveAsBroadcast(currentSelection); onClose(); }} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:text-dr7-teal transition-all shadow-sm" disabled={currentSelection.length === 0}>{t('broadcast.saveAsList')}</button>
           <div className="flex gap-3 flex-1">
-            <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100 shadow-sm">Annulla</button>
-            <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md" disabled={currentSelection.length === 0}>Conferma ({currentSelection.length})</button>
+            <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100 shadow-sm">{t('common.cancel')}</button>
+            <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md" disabled={currentSelection.length === 0}>{t('common.confirm')} ({currentSelection.length})</button>
           </div>
         </div>
       </motion.div>
