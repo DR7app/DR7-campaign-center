@@ -119,6 +119,49 @@ export default function App() {
     });
   };
 
+  // --- Lead Form State ---
+  const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
+  const [newLeadForm, setNewLeadForm] = useState({
+    firstName: '',
+    lastName: '',
+    phone: ''
+  });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
+  const handleCreateLead = () => {
+    const errors: Record<string, string> = {};
+    if (!newLeadForm.firstName.trim()) errors.firstName = 'Il nome è obbligatorio.';
+    if (!newLeadForm.phone.trim()) {
+      errors.phone = 'Il numero di telefono è obbligatorio.';
+    } else if (!/^\+?[\d\s-]{8,20}$/.test(newLeadForm.phone.trim())) {
+      errors.phone = 'Inserisci un numero di telefono valido.';
+    } else if (leads.some(l => l.phone.replace(/\s+/g, '') === newLeadForm.phone.replace(/\s+/g, ''))) {
+      errors.phone = 'Un lead con questo numero esiste già.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+
+    const newLead: Lead = {
+      id: `lead-${Date.now()}`,
+      firstName: newLeadForm.firstName.trim(),
+      lastName: newLeadForm.lastName.trim(),
+      phone: newLeadForm.phone.trim(),
+      tags: [],
+      list: 'Generale',
+      consent: 'Attivo',
+      createdAt: new Date().toISOString()
+    };
+
+    setLeads(prev => [newLead, ...prev]);
+    setIsLeadModalOpen(false);
+    setNewLeadForm({ firstName: '', lastName: '', phone: '' });
+    setFormErrors({});
+    alert("Lead creato con successo.");
+  };
+
   // --- Campaign Form State ---
   const [newCampaign, setNewCampaign] = useState<Partial<Campaign>>({
     name: '',
@@ -592,7 +635,7 @@ export default function App() {
                     <FileUp size={14} /> IMPORTA CSV
                     <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
                   </label>
-                  <button onClick={() => alert("Nuovo Lead: modulo in arrivo.")} className="btn-teal px-6 py-2 content-center font-bold text-sm">
+                  <button onClick={() => setIsLeadModalOpen(true)} className="btn-teal px-6 py-2 content-center font-bold text-sm">
                     + NUOVO LEAD
                   </button>
                 </div>
@@ -942,6 +985,95 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+
+      {/* --- New Lead Modal --- */}
+      <AnimatePresence>
+        {isLeadModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsLeadModalOpen(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50">
+                <h3 className="font-bold text-lg uppercase tracking-tight">Crea Nuovo Lead</h3>
+                <button 
+                  onClick={() => setIsLeadModalOpen(false)}
+                  className="p-1 hover:bg-gray-200 rounded-full text-text-secondary transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Nome *</label>
+                  <input 
+                    type="text" 
+                    placeholder="Es. Mario"
+                    className={`w-full bg-white border ${formErrors.firstName ? 'border-dr7-red' : 'border-border-primary'} rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors`}
+                    value={newLeadForm.firstName}
+                    onChange={(e) => {
+                      setNewLeadForm(prev => ({ ...prev, firstName: e.target.value }));
+                      if (formErrors.firstName) setFormErrors(prev => ({ ...prev, firstName: '' }));
+                    }}
+                  />
+                  {formErrors.firstName && <p className="text-[10px] text-dr7-red font-bold">{formErrors.firstName}</p>}
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Cognome</label>
+                  <input 
+                    type="text" 
+                    placeholder="Es. Rossi"
+                    className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors"
+                    value={newLeadForm.lastName}
+                    onChange={(e) => setNewLeadForm(prev => ({ ...prev, lastName: e.target.value }))}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">WhatsApp / Cellulare *</label>
+                  <input 
+                    type="text" 
+                    placeholder="Es. +39 333 1234567"
+                    className={`w-full bg-white border ${formErrors.phone ? 'border-dr7-red' : 'border-border-primary'} rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors`}
+                    value={newLeadForm.phone}
+                    onChange={(e) => {
+                      setNewLeadForm(prev => ({ ...prev, phone: e.target.value }));
+                      if (formErrors.phone) setFormErrors(prev => ({ ...prev, phone: '' }));
+                    }}
+                  />
+                  {formErrors.phone && <p className="text-[10px] text-dr7-red font-bold">{formErrors.phone}</p>}
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 border-t border-border-primary flex gap-3">
+                <button 
+                  onClick={() => setIsLeadModalOpen(false)}
+                  className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-tight hover:bg-gray-100 transition-all"
+                >
+                  Annulla
+                </button>
+                <button 
+                  onClick={handleCreateLead}
+                  className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-tight shadow-md"
+                >
+                  Salva Lead
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   </div>
   );
