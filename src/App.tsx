@@ -1004,14 +1004,6 @@ export default function App() {
             </motion.div>
           )}
 
-          {activeSection === 'media' && (
-             <motion.div key="media" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-               <h1 className="text-3xl font-bold tracking-tight">Media Library</h1>
-               <div className="bg-white border border-border-primary rounded-xl p-12 text-center">
-                  <p className="text-text-secondary italic">Sezione in fase di sviluppo...</p>
-               </div>
-             </motion.div>
-          )}
           {activeSection === 'campaigns' && activeSubTab === 'nuova' && (
             <motion.div key="nuova-campagna" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
@@ -1050,17 +1042,88 @@ export default function App() {
                         onChange={e => setNewCampaign(prev => ({ ...prev, message: e.target.value }))}
                       />
                       <div className="flex justify-between items-center bg-gray-50 p-3 rounded border border-gray-100">
-                        <div className="flex gap-2">
-                          <button className="p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 text-text-secondary transition-all">
+                        <div className="flex gap-2 items-center">
+                          <label className="p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 text-text-secondary transition-all cursor-pointer" title="Allega immagine">
                             <ImageIcon size={18} />
-                          </button>
-                          <button className="p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 text-text-secondary transition-all">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const url = URL.createObjectURL(file);
+                                const newMedia: MediaFile = {
+                                  id: `media-${Date.now()}`,
+                                  name: file.name,
+                                  url,
+                                  type: 'image',
+                                  size: file.size,
+                                  createdAt: new Date().toISOString(),
+                                };
+                                setMedia(prev => [newMedia, ...prev]);
+                                setNewCampaign(prev => ({ ...prev, media: { type: 'image', url } }));
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                          <label className="p-2 hover:bg-white rounded border border-transparent hover:border-gray-200 text-text-secondary transition-all cursor-pointer" title="Allega video">
                             <Video size={18} />
-                          </button>
+                            <input
+                              type="file"
+                              accept="video/*"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const url = URL.createObjectURL(file);
+                                const newMedia: MediaFile = {
+                                  id: `media-${Date.now()}`,
+                                  name: file.name,
+                                  url,
+                                  type: 'video',
+                                  size: file.size,
+                                  createdAt: new Date().toISOString(),
+                                };
+                                setMedia(prev => [newMedia, ...prev]);
+                                setNewCampaign(prev => ({ ...prev, media: { type: 'video', url } }));
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                          {newCampaign.media && (
+                            <div className="flex items-center gap-2 ml-2 px-2 py-1 bg-white border border-border-primary rounded">
+                              {newCampaign.media.type === 'image' ? (
+                                <img src={newCampaign.media.url} alt="anteprima" className="w-8 h-8 object-cover rounded" />
+                              ) : (
+                                <Video size={14} className="text-dr7-teal" />
+                              )}
+                              <span className="text-[10px] font-bold text-text-secondary">Allegato</span>
+                              <button
+                                type="button"
+                                onClick={() => setNewCampaign(prev => ({ ...prev, media: undefined }))}
+                                className="text-text-secondary hover:text-dr7-red"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+                          )}
                         </div>
                         <div className="flex gap-2">
-                          <button className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all">AI: MIGLIORA</button>
-                          <button className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all">STRUMENTI AI</button>
+                          <button
+                            type="button"
+                            onClick={() => alert('Funzione AI in arrivo: scrivi il messaggio e clicca STRUMENTI AI per le opzioni Gemini.')}
+                            className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all"
+                          >
+                            AI: MIGLIORA
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setActiveSection('ai')}
+                            className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all"
+                          >
+                            STRUMENTI AI
+                          </button>
                         </div>
                       </div>
                     </div>
