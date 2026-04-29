@@ -18,6 +18,9 @@ import { ClientiPanel } from './components/ClientiPanel';
 import { MessaggiPanel } from './components/MessaggiPanel';
 import { CampaignSenderModal } from './components/CampaignSenderModal';
 import { WhatsappSettingsCard } from './components/WhatsappSettingsCard';
+import { ReportsPanel } from './components/ReportsPanel';
+import { CalendarPanel } from './components/CalendarPanel';
+import { EditCampaignModal } from './components/EditCampaignModal';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -515,6 +518,9 @@ export default function App() {
 
   // --- Sender Modal ---
   const [senderModalCampaignId, setSenderModalCampaignId] = useState<string | null>(null);
+
+  // --- Edit Campaign Modal ---
+  const [editCampaignId, setEditCampaignId] = useState<string | null>(null);
 
   // --- Conversion types (per merchant; default list) ---
   const conversionTypes = useMemo(() => {
@@ -1580,6 +1586,7 @@ export default function App() {
                             hasRecipients={(campaign.recipients?.length ?? 0) > 0}
                             onShowRecipients={() => setRecipientsModalCampaignId(campaign.id)}
                             onSendCampaign={() => setSenderModalCampaignId(campaign.id)}
+                            onEdit={() => setEditCampaignId(campaign.id)}
                             onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
                             schedule={campaign.schedule}
                             getSummary={getScheduleSummary}
@@ -1896,35 +1903,8 @@ export default function App() {
           )}
 
           {activeSection === 'reports' && (
-            <motion.div key="reports" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
-              <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.reports')}</h1>
-              
-              {campaigns.filter(c => ['Inviata', 'Simulata'].includes(c.status)).length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                      <p className="text-[10px] font-bold text-text-secondary uppercase">Deliverability</p>
-                      <p className="text-3xl font-black text-dr7-teal">99.8%</p>
-                   </div>
-                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                      <p className="text-[10px] font-bold text-text-secondary uppercase">Engagement</p>
-                      <p className="text-3xl font-black text-dr7-blue">~12%</p>
-                   </div>
-                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                      <p className="text-[10px] font-bold text-text-secondary uppercase">Test Mode</p>
-                      <p className="text-3xl font-black text-dr7-red">{settings.testMode ? t('common.save').toUpperCase() : t('common.none').toUpperCase()}</p>
-                   </div>
-                </div>
-              ) : (
-                <div className="bg-white border border-border-primary rounded-lg p-20 text-center space-y-4">
-                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100 mx-auto">
-                      <History size={32} />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-black">{t('dashboard.noCampaigns')}</h3>
-                      <p className="text-sm text-text-secondary max-w-sm mx-auto">{t('campaigns.noCampaignsDesc')}</p>
-                    </div>
-                </div>
-              )}
+            <motion.div key="reports" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <ReportsPanel campaigns={campaigns} />
             </motion.div>
           )}
 
@@ -1963,20 +1943,8 @@ export default function App() {
           )}
 
           {activeSection === 'calendar' && (
-            <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-               <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.calendar')}</h1>
-               <div className="bg-white border border-border-primary rounded-lg p-20 text-center space-y-4 shadow-sm">
-                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100 mx-auto">
-                      <Calendar size={32} />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-bold text-black">{t('dashboard.noCampaigns')}</h3>
-                      <p className="text-sm text-text-secondary max-w-sm mx-auto">{t('campaigns.noCampaignsDesc')}</p>
-                    </div>
-                    <button onClick={() => { setActiveSection('campaigns'); setActiveSubTab('nuova'); }} className="btn-teal px-6 py-2">
-                       {t('campaigns.new')}
-                    </button>
-                </div>
+            <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <CalendarPanel campaigns={campaigns} />
             </motion.div>
           )}
           {activeSection === 'settings' && (
@@ -2281,6 +2249,20 @@ export default function App() {
             <RecipientsModal
               campaign={c}
               onClose={() => setRecipientsModalCampaignId(null)}
+            />
+          );
+        })()}
+
+        {editCampaignId && (() => {
+          const c = campaigns.find(x => x.id === editCampaignId);
+          if (!c) return null;
+          return (
+            <EditCampaignModal
+              campaign={c}
+              onClose={() => setEditCampaignId(null)}
+              onSave={(updates) => {
+                setCampaigns(prev => prev.map(x => x.id === editCampaignId ? { ...x, ...updates } : x));
+              }}
             />
           );
         })()}
@@ -2727,7 +2709,7 @@ function LeadTableRow({ name, phone, lists, status, date, source, onDelete }: an
   );
 }
 
-function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasRecipients, onShowRecipients, onSendCampaign, onDelete, schedule, getSummary }: any) {
+function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasRecipients, onShowRecipients, onSendCampaign, onEdit, onDelete, schedule, getSummary }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group border-b border-border-primary last:border-0">
       <td className="p-4 align-top">
@@ -2804,7 +2786,18 @@ function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasR
                </button>
              </>
            )}
-           <button className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all opacity-0 group-hover:opacity-100" onClick={onDelete} title="Delete">
+           <button
+             className="p-2 bg-white border border-border-primary hover:text-dr7-teal rounded shadow-sm transition-all opacity-0 group-hover:opacity-100"
+             onClick={onEdit}
+             title="Modifica"
+           >
+              <Settings size={14} />
+           </button>
+           <button
+             className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all opacity-0 group-hover:opacity-100"
+             onClick={onDelete}
+             title="Elimina"
+           >
               <Trash2 size={14} />
            </button>
         </div>
