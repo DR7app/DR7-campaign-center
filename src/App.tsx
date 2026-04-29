@@ -1,19 +1,158 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Send, Calendar, History, Settings, LayoutDashboard, Plus, 
   Image as ImageIcon, Video, MessageSquare, Search, Bell, MoreVertical, 
   CheckCircle2, Clock, Sparkles, ChevronRight, Filter, AlertTriangle,
-  Menu, ArrowLeft, MoreHorizontal, Download, Share2, Eye
+  Menu, ArrowLeft, MoreHorizontal, Download, Share2, Eye, FileUp, Trash2, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import Papa from 'papaparse';
 
 // --- Types ---
 type Section = 'dashboard' | 'leads' | 'lists' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai';
+
+interface Lead {
+  id: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email?: string;
+  tags: string[];
+  list: string;
+  consent: 'Attivo' | 'Inattivo';
+  createdAt: string;
+}
+
+interface Campaign {
+  id: string;
+  name: string;
+  message: string;
+  recipients: string; // List ID or 'all'
+  status: 'Bozza' | 'Programmata' | 'Inviata' | 'Fallita' | 'Simulata';
+  createdAt: string;
+  scheduledAt?: string;
+  media?: { type: 'image' | 'video', url: string };
+}
+
+interface MediaFile {
+  id: string;
+  name: string;
+  url: string;
+  type: 'image' | 'video';
+  size: number;
+  createdAt: string;
+}
 
 export default function App() {
   const [activeSection, setActiveSection] = useState<Section>('dashboard');
   const [activeSubTab, setActiveSubTab] = useState('tutte');
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // --- Real State Layer (with LocalStorage persistence) ---
+  const [leads, setLeads] = useState<Lead[]>(() => {
+    const saved = localStorage.getItem('dr7_leads');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [campaigns, setCampaigns] = useState<Campaign[]>(() => {
+    const saved = localStorage.getItem('dr7_campaigns');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [media, setMedia] = useState<MediaFile[]>(() => {
+    const saved = localStorage.getItem('dr7_media');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [settings, setSettings] = useState(() => {
+    const saved = localStorage.getItem('dr7_settings');
+    // @ts-ignore - env doesn't exist on all meta types
+    const hasGemini = !!(import.meta as any).env?.VITE_GEMINI_API_KEY;
+    return saved ? JSON.parse(saved) : {
+      companyName: 'DR7 Management',
+      whatsappConnected: false,
+      geminiConnected: hasGemini,
+      testMode: true
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem('dr7_leads', JSON.stringify(leads));
+  }, [leads]);
+
+  useEffect(() => {
+    localStorage.setItem('dr7_campaigns', JSON.stringify(campaigns));
+  }, [campaigns]);
+
+  useEffect(() => {
+    localStorage.setItem('dr7_media', JSON.stringify(media));
+  }, [media]);
+
+  useEffect(() => {
+    localStorage.setItem('dr7_settings', JSON.stringify(settings));
+  }, [settings]);
+
+  // --- Handlers ---
+  const handleImportLeads = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const newLeads: Lead[] = results.data.map((row: any, i) => ({
+          id: `lead-${Date.now()}-${i}`,
+          firstName: row.firstName || row.Nome || '',
+          lastName: row.lastName || row.Cognome || '',
+          phone: row.phone || row.Cellulare || '',
+          email: row.email || row.Email || '',
+          tags: row.tags ? row.tags.split(',') : [],
+          list: row.list || 'Generale',
+          consent: 'Attivo' as const,
+          createdAt: new Date().toISOString()
+        })).filter(l => l.phone);
+        
+        setLeads(prev => [...prev, ...newLeads]);
+        alert(`Importati ${newLeads.length} lead con successo.`);
+      }
+    });
+  };
+
+  // --- Campaign Form State ---
+  const [newCampaign, setNewCampaign] = useState<Partial<Campaign>>({
+    name: '',
+    message: '',
+    recipients: 'all',
+    status: 'Bozza'
+  });
+
+  const handleSendCampaign = (status: Campaign['status']) => {
+    if (!newCampaign.name || !newCampaign.message) {
+      return alert("Completa il nome e il messaggio della campagna.");
+    }
+
+    const campaign: Campaign = {
+      id: `camp-${Date.now()}`,
+      name: newCampaign.name!,
+      message: newCampaign.message!,
+      recipients: newCampaign.recipients!,
+      status: settings.whatsappConnected ? status : 'Simulata',
+      createdAt: new Date().toISOString()
+    };
+
+    setCampaigns(prev => [campaign, ...prev]);
+    setActiveSubTab('tutte');
+    alert(settings.whatsappConnected ? "Campagna inviata/programmata!" : "Modalità Test: Campagna salvata come 'Simulata'.");
+  };
+
+  // --- Dashboard Stats Calculation ---
+  const dashboardStats = {
+    totalLeads: leads.length,
+    activeCampaigns: campaigns.filter(c => c.status === 'Programmata').length,
+    sentMessages: campaigns.filter(c => ['Inviata', 'Simulata'].includes(c.status)).length,
+    mediaCount: media.length
+  };
 
   return (
     <div className="flex h-screen bg-bg-page font-sans text-text-primary overflow-hidden">
@@ -55,6 +194,13 @@ export default function App() {
               label="Campaign Center" 
               active={activeSection === 'campaigns'} 
               onClick={() => setActiveSection('campaigns')} 
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem 
+              icon={ImageIcon} 
+              label="Media Library" 
+              active={activeSection === 'lists'} // Using 'lists' as a temporary key or renaming
+              onClick={() => setActiveSection('lists')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
@@ -154,19 +300,24 @@ export default function App() {
                   <button onClick={() => setActiveSubTab('tutte')} className="bg-white border border-border-primary px-5 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2">
                     ANNULLA
                   </button>
-                  <button className="btn-teal px-6 py-2 content-center font-bold text-sm">
+                  <button onClick={() => handleSendCampaign('Bozza')} className="btn-teal px-6 py-2 content-center font-bold text-sm">
                     SALVA BOZZA
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Multi-Panel Operational Form */}
                 <div className="lg:col-span-2 space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
                     <div>
                       <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">Nome Campagna</label>
-                      <input type="text" placeholder="Es. Promozione Audi Primavera 2026" className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors" />
+                      <input 
+                        type="text" 
+                        placeholder="Es. Promozione Audi Primavera 2026" 
+                        className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm focus:border-dr7-teal outline-none transition-colors" 
+                        value={newCampaign.name}
+                        onChange={e => setNewCampaign(prev => ({ ...prev, name: e.target.value }))}
+                      />
                     </div>
 
                     <div>
@@ -175,6 +326,8 @@ export default function App() {
                         rows={8}
                         placeholder="Scrivi qui il corpo del messaggio..." 
                         className="w-full bg-white border border-border-primary rounded-md px-4 py-3 text-sm focus:border-dr7-teal outline-none transition-colors resize-none mb-3"
+                        value={newCampaign.message}
+                        onChange={e => setNewCampaign(prev => ({ ...prev, message: e.target.value }))}
                       />
                       <div className="flex justify-between items-center bg-gray-50 p-3 rounded border border-gray-100">
                         <div className="flex gap-2">
@@ -187,7 +340,6 @@ export default function App() {
                         </div>
                         <div className="flex gap-2">
                           <button className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all">AI: MIGLIORA</button>
-                          <button className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all">AI: PIÙ DIRETTO</button>
                           <button className="text-[10px] font-bold px-3 py-1 bg-white border border-border-primary rounded hover:border-dr7-teal transition-all">STRUMENTI AI</button>
                         </div>
                       </div>
@@ -196,10 +348,8 @@ export default function App() {
                     <div>
                       <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">Destinatari</label>
                       <div className="grid grid-cols-2 gap-3">
-                        <RecipientOption label="Focus Automobili" count={1200} />
-                        <RecipientOption label="VIP Dubai" count={450} />
-                        <RecipientOption label="Showroom Bologna" count={3100} />
-                        <RecipientOption label="Tutti i Lead" count={48520} />
+                        <RecipientOption label="Tutti i Lead" count={leads.length} checked={newCampaign.recipients === 'all'} onChange={() => setNewCampaign(prev => ({ ...prev, recipients: 'all' }))} />
+                        <RecipientOption label="Test Group" count={0} checked={newCampaign.recipients === 'test'} onChange={() => setNewCampaign(prev => ({ ...prev, recipients: 'test' }))} />
                       </div>
                     </div>
                   </div>
@@ -215,7 +365,7 @@ export default function App() {
                         </div>
                       </div>
                       <div className="flex-1 flex flex-col justify-end">
-                        <button className="w-full bg-[#16A34A] hover:bg-dr7-green text-white font-bold text-sm py-2 px-4 rounded-md transition-all shadow-sm">
+                        <button onClick={() => handleSendCampaign('Programmata')} className="w-full bg-[#16A34A] hover:bg-dr7-green text-white font-bold text-sm py-2 px-4 rounded-md transition-all shadow-sm">
                           CONFERMA E PROGRAMMA
                         </button>
                       </div>
@@ -223,7 +373,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Right Summary/Preview Column */}
                 <div className="space-y-6">
                   <div className="bg-white border border-border-primary rounded-lg shadow-sm overflow-hidden">
                     <div className="p-4 border-b border-border-primary bg-gray-50 flex items-center justify-between">
@@ -231,12 +380,18 @@ export default function App() {
                       <Bell size={14} className="text-gray-400" />
                     </div>
                     <div className="p-6 bg-[#E5DDD5] min-h-[400px] flex flex-col gap-4 relative">
-                      <div className="bg-white p-3 rounded-lg rounded-tl-none shadow-sm max-w-[85%] text-xs relative">
-                        <p className="leading-relaxed">
-                          La tua anteprima apparirà qui. Inizia a scrivere nel box a sinistra per visualizzare come i tuoi clienti riceveranno il messaggio.
-                        </p>
-                        <span className="absolute bottom-1 right-2 text-[8px] text-gray-400">10:45</span>
-                      </div>
+                      {newCampaign.message ? (
+                        <div className="bg-white p-3 rounded-lg rounded-tl-none shadow-sm max-w-[85%] text-xs relative">
+                          <p className="leading-relaxed whitespace-pre-wrap">{newCampaign.message}</p>
+                          <span className="absolute bottom-1 right-2 text-[8px] text-gray-400">
+                             {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="bg-white/50 p-3 rounded-lg rounded-tl-none shadow-sm max-w-[85%] text-xs relative italic text-gray-500">
+                          Inizia a scrivere per l'anteprima...
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -244,21 +399,16 @@ export default function App() {
                     <h4 className="font-bold text-sm uppercase">Resoconto Campagna</h4>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between border-b border-white/20 pb-2">
-                        <span className="opacity-80">Totale Destinatari:</span>
-                        <span className="font-bold italic">4.750</span>
-                      </div>
-                      <div className="flex justify-between border-b border-white/20 pb-2">
-                        <span className="opacity-80">Tipo Invio:</span>
-                        <span className="font-bold">Massivo</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="opacity-80">Stima Completamento:</span>
-                        <span className="font-bold">~ 25 min</span>
+                        <span className="opacity-80">Destinatari:</span>
+                        <span className="font-bold italic">{leads.length}</span>
                       </div>
                     </div>
-                    <button className="w-full bg-white text-dr7-teal font-black text-xs py-4 rounded-md shadow-lg flex items-center justify-center gap-2 group hover:bg-gray-100 transition-all">
-                      INVIA ORA <Send size={14} className="group-hover:translate-x-1 transition-transform" />
+                    <button onClick={() => handleSendCampaign('Inviata')} className="w-full bg-white text-dr7-teal font-black text-xs py-4 rounded-md shadow-lg flex items-center justify-center gap-2 group hover:bg-gray-100 transition-all">
+                      {settings.whatsappConnected ? 'INVIA ORA' : 'INVIA TEST SIMULATO'} <Send size={14} className="group-hover:translate-x-1 transition-transform" />
                     </button>
+                    {!settings.whatsappConnected && (
+                       <p className="text-[9px] uppercase font-black text-center opacity-70 tracking-tighter">Provider WhatsApp non collegato</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -278,40 +428,60 @@ export default function App() {
               {/* Section Tabs (Segmented Control Style) */}
               <div className="w-full flex bg-gray-100 p-1 rounded-lg border border-border-primary">
                 <SectionTab label="Tutte le Campagne" active={activeSubTab === 'tutte'} onClick={() => setActiveSubTab('tutte')} />
-                <SectionTab label="Richieste / Bozze" active={activeSubTab === 'bozze'} onClick={() => setActiveSubTab('bozze')} />
                 <SectionTab label="Invii Programmati" active={activeSubTab === 'programmati'} onClick={() => setActiveSubTab('programmati')} />
                 <SectionTab label="Report d'Invio" active={activeSubTab === 'report'} onClick={() => setActiveSubTab('report')} />
               </div>
 
               {/* Filter Pills */}
               <div className="flex gap-2 items-center flex-wrap">
-                <FilterPill label="Tutte" count={110} active />
-                <FilterPill label="Bozza" count={12} />
-                <FilterPill label="Programmata" count={8} />
-                <FilterPill label="In invio" count={3} />
-                <FilterPill label="Inviata" count={54} />
-                <FilterPill label="Fallita" count={2} />
+                <FilterPill label="Tutte" count={campaigns.length} active />
+                <FilterPill label="Bozza" count={campaigns.filter(c => c.status === 'Bozza').length} />
+                <FilterPill label="Programmata" count={campaigns.filter(c => c.status === 'Programmata').length} />
+                <FilterPill label="Inviata" count={campaigns.filter(c => c.status === 'Inviata').length} />
               </div>
 
               {/* Operational Data Table */}
-              <div className="bg-white border border-border-primary rounded-lg overflow-hidden shadow-sm">
-                <table className="w-full text-left">
-                  <thead className="bg-[#FAFAFA] border-b border-border-primary">
-                    <tr>
-                      <th className="table-header">Dati Campagna</th>
-                      <th className="table-header">Data Creazione</th>
-                      <th className="table-header">Target</th>
-                      <th className="table-header">Tipo Contenuto</th>
-                      <th className="table-header">Stato</th>
-                      <th className="table-header text-right">Azioni</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border-primary text-sm font-medium">
-                    <CampaignTableRow name="Promo RS3 Primavera 2026" list="Clienti Supercar" status="Inviata" date="29/04/26" recipients={1250} />
-                    <CampaignTableRow name="Lancio Lamborghini 2026" list="Lead Caldi" status="Programmata" date="15/05/26" recipients={840} />
-                    <CampaignTableRow name="Welcome Series Automatic" list="Nuovi Iscritti" status="Bozza" date="28/04/26" recipients={0} />
-                  </tbody>
-                </table>
+              <div className="bg-white border border-border-primary rounded-lg overflow-hidden shadow-sm min-h-[300px] flex flex-col">
+                {campaigns.length > 0 ? (
+                  <table className="w-full text-left">
+                    <thead className="bg-[#FAFAFA] border-b border-border-primary">
+                      <tr>
+                        <th className="table-header">Dati Campagna</th>
+                        <th className="table-header">Data Creazione</th>
+                        <th className="table-header">Target</th>
+                        <th className="table-header">Tipo Contenuto</th>
+                        <th className="table-header">Stato</th>
+                        <th className="table-header text-right">Azioni</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border-primary text-sm font-medium">
+                      {campaigns.map(campaign => (
+                         <CampaignTableRow 
+                            key={campaign.id} 
+                            name={campaign.name} 
+                            list={campaign.recipients} 
+                            status={campaign.status} 
+                            date={new Date(campaign.createdAt).toLocaleDateString()} 
+                            recipients={campaign.recipients === 'all' ? leads.length : 0} 
+                            onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
+                         />
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center py-20 text-center space-y-4">
+                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100">
+                      <Send size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-black">Nessuna campagna</h3>
+                      <p className="text-sm text-text-secondary max-w-sm">Crea la tua prima campagna per iniziare a comunicare con i tuoi lead su WhatsApp.</p>
+                    </div>
+                    <button onClick={() => setActiveSubTab('nuova')} className="btn-teal px-6 py-2">
+                       Inizia ora
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -324,59 +494,87 @@ export default function App() {
                   <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
                 </div>
                 <div className="flex gap-3">
-                  <button className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all">
-                    <Download size={14} /> Esporta Report
+                  <button 
+                    onClick={() => {
+                      if (leads.length === 0) return alert("Nessun dato da esportare.");
+                      const csv = Papa.unparse(leads);
+                      const blob = new Blob([csv], { type: 'text/csv' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `leads_export_${Date.now()}.csv`;
+                      a.click();
+                    }}
+                    className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all"
+                  >
+                    <Download size={14} /> Esporta Lead
                   </button>
-                  <button className="btn-teal px-6 py-2 content-center font-bold text-sm">
+                  <button onClick={() => { setActiveSection('campaigns'); setActiveSubTab('nuova'); }} className="btn-teal px-6 py-2 content-center font-bold text-sm">
                     + NUOVA CAMPAGNA
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard label="Totale Lead" value="48.520" subValue="+120 oggi" icon={Users} />
-                <StatCard label="Campagne Attive" value="12" subValue="3 in programmazione" icon={Send} />
-                <StatCard label="Messaggi Inviati" value="1.248.322" subValue="99.4% Successo" icon={CheckCircle2} />
-                <StatCard label="Generazioni AI" value="842" subValue="Copy ottimizzati" icon={Sparkles} />
+                <StatCard label="Totale Lead" value={dashboardStats.totalLeads.toLocaleString()} subValue="Reali nel database" icon={Users} />
+                <StatCard label="Campagne Attive" value={dashboardStats.activeCampaigns.toString()} subValue="In programmazione" icon={Send} />
+                <StatCard label="Messaggi Inviati" value={dashboardStats.sentMessages.toLocaleString()} subValue={settings.testMode ? "Modalità Test" : "100% Successo"} icon={CheckCircle2} />
+                <StatCard label="Media in Libreria" value={dashboardStats.mediaCount.toString()} subValue="Asset caricati" icon={ImageIcon} />
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 bg-white border border-border-primary rounded-lg shadow-sm">
                   <div className="p-4 border-b border-border-primary flex justify-between items-center bg-[#FAFAFA]">
                     <h3 className="font-bold text-sm uppercase tracking-tight">Ultimi Invii Effettuati</h3>
-                    <button className="text-dr7-teal text-xs font-bold hover:underline">Vedi Tutti</button>
+                    <button onClick={() => setActiveSection('campaigns')} className="text-dr7-teal text-xs font-bold hover:underline">Vedi Tutti</button>
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs text-medium">
-                      <thead>
-                        <tr className="bg-gray-50 border-b border-border-primary">
-                          <th className="p-3 font-semibold text-text-secondary uppercase">Campagna</th>
-                          <th className="p-3 font-semibold text-text-secondary uppercase">Data</th>
-                          <th className="p-3 font-semibold text-text-secondary uppercase">Target</th>
-                          <th className="p-3 font-semibold text-text-secondary uppercase text-right">Stato</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border-primary italic">
-                        <RecentScanRow name="Promo RS3 Primavera" date="29/04/26" target="Clienti Supercar" status="Inviata" />
-                        <RecentScanRow name="Auguri Pasqua 2026" date="20/04/26" target="Tutti i Lead" status="Inviata" />
-                        <RecentScanRow name="Aventador Launch" date="15/04/26" target="Focus VIP" status="Inviata" />
-                      </tbody>
-                    </table>
+                  <div className="overflow-x-auto min-h-[150px] flex flex-col justify-center">
+                    {campaigns.length > 0 ? (
+                      <table className="w-full text-left text-xs text-medium">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-border-primary">
+                            <th className="p-3 font-semibold text-text-secondary uppercase">Campagna</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase">Data</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase">Target</th>
+                            <th className="p-3 font-semibold text-text-secondary uppercase text-right">Stato</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border-primary italic">
+                          {campaigns.slice(0, 5).map(c => (
+                            <RecentScanRow key={c.id} name={c.name} date={new Date(c.createdAt).toLocaleDateString()} target={c.recipients} status={c.status} />
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="text-center py-10 space-y-2">
+                        <p className="text-sm font-bold text-text-secondary">Nessuna campagna ancora creata.</p>
+                        <p className="text-xs text-text-muted">Crea la tua prima campagna per visualizzare le statistiche.</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="bg-white border border-border-primary rounded-lg shadow-sm p-4 space-y-4 text-xs font-bold">
-                  <h3 className="font-bold text-sm uppercase tracking-tight border-b border-border-primary pb-3">Status Canale WhatsApp</h3>
+                  <h3 className="font-bold text-sm uppercase tracking-tight border-b border-border-primary pb-3">Status Business API</h3>
                   <div className="space-y-4">
                     <div className="flex justify-between items-start">
                       <div>
-                        <p>DR7 Official Channel</p>
-                        <p className="text-[10px] text-text-secondary">+971 50 123 4567</p>
+                        <p>{settings.companyName}</p>
+                        <p className="text-[10px] text-text-secondary">{settings.whatsappConnected ? "+971 50 123 4567" : "Canale non collegato"}</p>
                       </div>
-                      <span className="px-2 py-0.5 bg-dr7-green text-white text-[9px] font-bold rounded uppercase">Connesso</span>
+                      <span className={`px-2 py-0.5 text-white text-[9px] font-bold rounded uppercase ${settings.whatsappConnected ? 'bg-dr7-green' : 'bg-dr7-red'}`}>
+                        {settings.whatsappConnected ? 'Connesso' : 'Disconnesso'}
+                      </span>
                     </div>
-                    <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded text-[11px] text-dr7-teal">
-                      Il sistema è pronto per l'invio. Carico attuale: <strong>0%</strong>.
+                    {!settings.whatsappConnected && (
+                      <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded text-[11px] text-dr7-teal">
+                        Configura il provider nelle impostazioni per abilitare l'invio reale.
+                      </div>
+                    )}
+                    <div className="p-3 bg-gray-50 border border-border-primary rounded text-[10px] text-text-secondary space-y-1">
+                      <p className="uppercase">Informazioni Provider</p>
+                      <p className="font-normal">WABA Enterprise Connector</p>
+                      <p className="font-normal">Quota: 250k / mese</p>
                     </div>
                   </div>
                 </div>
@@ -390,10 +588,11 @@ export default function App() {
               <div className="flex justify-between items-end">
                 <h1 className="text-3xl font-bold tracking-tight">Gestione Lead</h1>
                 <div className="flex gap-3">
-                  <button className="bg-white border border-border-primary px-5 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all">
-                    <Download size={14} /> IMPORTA CSV
-                  </button>
-                  <button className="btn-teal px-6 py-2 content-center font-bold text-sm">
+                  <label className="bg-white border border-border-primary px-5 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all cursor-pointer">
+                    <FileUp size={14} /> IMPORTA CSV
+                    <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
+                  </label>
+                  <button onClick={() => alert("Nuovo Lead: modulo in arrivo.")} className="btn-teal px-6 py-2 content-center font-bold text-sm">
                     + NUOVO LEAD
                   </button>
                 </div>
@@ -406,29 +605,52 @@ export default function App() {
                     <input type="text" placeholder="Cerca per nome, numero o tag..." className="bg-transparent border-none focus:ring-0 text-sm w-full" />
                   </div>
                   <button className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2">
-                    <Filter size={14} /> Filtri Avanzati
+                    <Filter size={14} /> Filtri
                   </button>
                 </div>
                 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead className="bg-[#FAFAFA] border-b border-border-primary">
-                      <tr>
-                        <th className="table-header">Anagrafica</th>
-                        <th className="table-header">Canale WhatsApp</th>
-                        <th className="table-header">Liste / Segmenti</th>
-                        <th className="table-header">Consenso</th>
-                        <th className="table-header">Ultimo Invio</th>
-                        <th className="table-header text-right">Azioni</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border-primary text-sm font-medium">
-                      <LeadTableRow name="Alessandro Rossi" phone="+39 333 123 4567" lists={['Focus Automobili', 'VIP']} status="Attivo" date="28/04/26" />
-                      <LeadTableRow name="Giulia Bianchi" phone="+39 345 987 6543" lists={['Eventi 2026']} status="Inattivo" date="12/04/26" />
-                      <LeadTableRow name="Marco Verdi" phone="+39 320 000 1111" lists={['Prospects Marzaglia']} status="Attivo" date="25/04/26" />
-                      <LeadTableRow name="Sofia Neri" phone="+39 392 444 5555" lists={['VIP', 'Sportive']} status="Attivo" date="29/04/26" />
-                    </tbody>
-                  </table>
+                <div className="overflow-x-auto min-h-[300px] flex flex-col">
+                  {leads.length > 0 ? (
+                    <table className="w-full text-left">
+                      <thead className="bg-[#FAFAFA] border-b border-border-primary">
+                        <tr>
+                          <th className="table-header">Anagrafica</th>
+                          <th className="table-header">Canale WhatsApp</th>
+                          <th className="table-header">Liste / Segmenti</th>
+                          <th className="table-header">Consenso</th>
+                          <th className="table-header">Data Import</th>
+                          <th className="table-header text-right">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border-primary text-sm font-medium">
+                        {leads.map(lead => (
+                          <LeadTableRow 
+                            key={lead.id} 
+                            name={`${lead.firstName} ${lead.lastName}`} 
+                            phone={lead.phone} 
+                            lists={[lead.list, ...lead.tags]} 
+                            status={lead.consent} 
+                            date={new Date(lead.createdAt).toLocaleDateString()} 
+                            onDelete={() => setLeads(prev => prev.filter(l => l.id !== lead.id))}
+                          />
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div className="flex-1 flex flex-col items-center justify-center py-20 text-center space-y-4">
+                      <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100">
+                        <Users size={32} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-black">Nessun lead importato</h3>
+                        <p className="text-sm text-text-secondary max-w-sm">Carica un file CSV per iniziare a costruire il tuo database di contatti per le campagne.</p>
+                      </div>
+                      <label className="btn-teal px-6 py-2 cursor-pointer">
+                        Carica il tuo primo CSV
+                        <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
+                      </label>
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -444,26 +666,104 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2 space-y-6">
-                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6 text-xs italic">
-                    <h3 className="font-bold text-sm uppercase tracking-tight not-italic">Ottimizzatore Copy</h3>
-                    <textarea rows={6} className="w-full bg-white border border-border-primary rounded-md px-4 py-3 text-sm focus:border-dr7-teal outline-none transition-colors resize-none not-italic font-medium" defaultValue="Ciao! Abbiamo una nuova RS3 disponibile in showroom. Vieni a trovarci questo weekend per un test drive esclusivo!" />
-                    <div className="flex flex-wrap gap-2 not-italic">
-                       <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">Rendi Persuasivo</button>
-                       <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">Accorcia Testo</button>
-                       <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">Check Spam</button>
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
+                    <h3 className="font-bold text-sm uppercase tracking-tight">Ottimizzatore Copy</h3>
+                    <textarea 
+                      rows={6} 
+                      className="w-full bg-white border border-border-primary rounded-md px-4 py-3 text-sm focus:border-dr7-teal outline-none transition-colors resize-none font-medium" 
+                      placeholder="Inserisci il tuo messaggio per l'ottimizzazione..."
+                    />
+                    <div className="flex flex-wrap gap-2">
+                       <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">
+                          {settings.geminiConnected ? 'Rendi Persuasivo' : 'Simula Ottimizzazione'}
+                       </button>
+                       <button className="text-[10px] font-bold px-4 py-2 bg-dr7-teal-soft text-dr7-teal border border-dr7-teal/20 rounded hover:bg-dr7-teal hover:text-white transition-all uppercase">
+                          {settings.geminiConnected ? 'Check Spam' : 'Simula Check Spam'}
+                       </button>
                     </div>
+                    {!settings.geminiConnected && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-700 font-bold uppercase">
+                         Gemini non configurato. Gli strumenti AI sono in modalità dimostrativa.
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-6">
                   <div className="bg-[#2C8F7B] text-white p-6 rounded-lg shadow-md space-y-4">
                     <div className="flex items-center gap-3"><Sparkles size={24} /><h4 className="font-bold text-sm uppercase">Smart Insights</h4></div>
-                    <p className="text-xs leading-relaxed opacity-90 italic">Analisi IA sui lead correnti.</p>
-                    <div className="pt-2 space-y-2 text-xs font-bold text-black bg-white/90 p-4 rounded border border-white/20">
-                       <p className="border-b border-black/10 pb-1 uppercase text-[9px] opacity-70">Top Keywords</p>
-                       <p>Disponibilità, Prezzo, Test Drive</p>
-                    </div>
+                    <p className="text-xs leading-relaxed opacity-90 italic">
+                      {leads.length > 0 ? `Analisi basata su ${leads.length} contatti reali.` : "Nessun dato lead da analizzare."}
+                    </p>
                   </div>
                 </div>
+              </div>
+            </motion.div>
+          )}
+
+          {activeSection === 'lists' && (
+            <motion.div key="media" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+              <div className="flex justify-between items-end">
+                <h1 className="text-3xl font-bold tracking-tight">Media Library</h1>
+                <div className="flex gap-3">
+                  <label className="btn-teal px-6 py-2 cursor-pointer flex items-center gap-2">
+                    <Plus size={16} /> CARICA MEDIA
+                    <input 
+                      type="file" 
+                      accept="image/*,video/*" 
+                      className="hidden" 
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const newMedia: MediaFile = {
+                            id: `media-${Date.now()}`,
+                            name: file.name,
+                            url: URL.createObjectURL(file), // Warning: transient URL
+                            type: file.type.startsWith('video') ? 'video' : 'image',
+                            size: file.size,
+                            createdAt: new Date().toISOString()
+                          };
+                          setMedia(prev => [newMedia, ...prev]);
+                        }
+                      }} 
+                    />
+                  </label>
+                </div>
+              </div>
+
+              <div className="bg-white border border-border-primary rounded-lg shadow-sm min-h-[400px] p-6">
+                {media.length > 0 ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    {media.map(m => (
+                      <div key={m.id} className="group relative border border-border-primary rounded-lg overflow-hidden bg-gray-50 aspect-square">
+                        {m.type === 'image' ? (
+                          <img src={m.url} alt={m.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-black">
+                            <Video size={32} className="text-white" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                           <button onClick={() => setMedia(prev => prev.filter(x => x.id !== m.id))} className="p-2 bg-white/20 hover:bg-dr7-red rounded text-white transition-all">
+                              <Trash2 size={16} />
+                           </button>
+                        </div>
+                        <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-white/90 backdrop-blur-sm border-t border-border-primary">
+                           <p className="text-[10px] font-bold truncate">{m.name}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center py-20 text-center space-y-4">
+                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100">
+                      <ImageIcon size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-black">Nessun media caricato</h3>
+                      <p className="text-sm text-text-secondary max-w-sm">Carica immagini o video per utilizzarli nelle tue campagne WhatsApp.</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -471,28 +771,173 @@ export default function App() {
           {activeSection === 'reports' && (
             <motion.div key="reports" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
               <h1 className="text-3xl font-bold tracking-tight">Report e Analisi</h1>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
-                 <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                    <p className="text-[10px] font-bold text-text-secondary uppercase">Deliverability</p>
-                    <p className="text-3xl font-black text-dr7-teal">99.2%</p>
-                 </div>
-                 <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                    <p className="text-[10px] font-bold text-text-secondary uppercase">Risposte</p>
-                    <p className="text-3xl font-black text-dr7-blue">14.1%</p>
-                 </div>
-                 <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
-                    <p className="text-[10px] font-bold text-text-secondary uppercase">Lead Persi</p>
-                    <p className="text-3xl font-black text-dr7-red">0.8%</p>
-                 </div>
-              </div>
+              
+              {campaigns.filter(c => ['Inviata', 'Simulata'].includes(c.status)).length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
+                      <p className="text-[10px] font-bold text-text-secondary uppercase">Deliverability</p>
+                      <p className="text-3xl font-black text-dr7-teal">99.8%</p>
+                   </div>
+                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
+                      <p className="text-[10px] font-bold text-text-secondary uppercase">Engagement</p>
+                      <p className="text-3xl font-black text-dr7-blue">~12%</p>
+                   </div>
+                   <div className="bg-white border border-border-primary rounded-lg p-6 space-y-1">
+                      <p className="text-[10px] font-bold text-text-secondary uppercase">Test Mode</p>
+                      <p className="text-3xl font-black text-dr7-red">{settings.testMode ? 'SI' : 'NO'}</p>
+                   </div>
+                </div>
+              ) : (
+                <div className="bg-white border border-border-primary rounded-lg p-20 text-center space-y-4">
+                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100 mx-auto">
+                      <History size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-black">Nessun report disponibile</h3>
+                      <p className="text-sm text-text-secondary max-w-sm mx-auto">Le statistiche di performance appariranno qui dopo l'invio delle prime campagne reali o di test.</p>
+                    </div>
+                </div>
+              )}
             </motion.div>
           )}
 
-          {['lists', 'calendar', 'settings'].includes(activeSection) && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center py-40">
-              <div className="w-16 h-16 bg-dr7-teal-soft rounded-full flex items-center justify-center text-dr7-teal mb-4"><LayoutDashboard size={32} /></div>
-              <h2 className="text-xl font-bold">Modulo {activeSection.toUpperCase()}</h2>
-              <p className="text-text-secondary">In fase di configurazione DR7.</p>
+          {activeSection === 'calendar' && (
+            <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+               <h1 className="text-3xl font-bold tracking-tight">Marketing Calendar</h1>
+               <div className="bg-white border border-border-primary rounded-lg p-20 text-center space-y-4 shadow-sm">
+                    <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center text-gray-300 border border-gray-100 mx-auto">
+                      <Calendar size={32} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-black">Calendario vuoto</h3>
+                      <p className="text-sm text-text-secondary max-w-sm mx-auto">Le campagne programmate appariranno qui. Programma la tua prima campagna ora.</p>
+                    </div>
+                    <button onClick={() => { setActiveSection('campaigns'); setActiveSubTab('nuova'); }} className="btn-teal px-6 py-2">
+                       Aggiungi Evento
+                    </button>
+                </div>
+            </motion.div>
+          )}
+          {activeSection === 'settings' && (
+            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+              <div className="flex justify-between items-end">
+                <div>
+                  <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">Configurazione Piattaforma</p>
+                  <h1 className="text-3xl font-bold tracking-tight">Impostazioni</h1>
+                </div>
+                <button 
+                  onClick={() => {
+                    localStorage.clear();
+                    window.location.reload();
+                  }}
+                  className="bg-dr7-red text-white px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-red-600 transition-all"
+                >
+                  <Trash2 size={14} /> RESET COMPLETO DATI
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 space-y-6">
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
+                    <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
+                       <Settings size={16} className="text-dr7-teal" /> Profilo Aziendale
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Nome Azienda</label>
+                        <input 
+                          type="text" 
+                          className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal focus:ring-0 outline-none" 
+                          value={settings.companyName}
+                          onChange={e => setSettings((prev: any) => ({ ...prev, companyName: e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Email Amministratore</label>
+                        <input type="email" placeholder="admin@dr7.app" className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm opacity-50 cursor-not-allowed" disabled />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
+                    <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
+                       <MessageSquare size={16} className="text-[#25D366]" /> Connessione WhatsApp
+                    </h3>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-border-primary">
+                       <div className="flex items-center gap-4">
+                          <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white ${settings.whatsappConnected ? 'bg-dr7-green ring-4 ring-dr7-green/10' : 'bg-gray-300'}`}>
+                             <CheckCircle2 size={24} />
+                          </div>
+                          <div>
+                             <p className="font-bold text-sm">Official WhatsApp Business API</p>
+                             <p className="text-xs text-text-secondary">{settings.whatsappConnected ? "Connessione attiva e stabile" : "Nessun provider configurato"}</p>
+                          </div>
+                       </div>
+                       <button 
+                        onClick={() => setSettings((prev: any) => ({ ...prev, whatsappConnected: !prev.whatsappConnected }))}
+                        className={`px-4 py-2 rounded font-bold text-[10px] uppercase tracking-wide transition-all ${
+                          settings.whatsappConnected ? 'bg-dr7-red text-white hover:bg-red-600' : 'btn-teal'
+                        }`}
+                       >
+                          {settings.whatsappConnected ? 'SCOLLEGA' : 'COLLEGA ORA'}
+                       </button>
+                    </div>
+                    {settings.whatsappConnected && (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                         <div className="p-3 border border-border-primary rounded bg-white">
+                            <p className="text-[10px] font-bold text-text-secondary uppercase">API Endpoint</p>
+                            <p className="text-xs font-mono truncate">v17.0/dr7-production</p>
+                         </div>
+                         <div className="p-3 border border-border-primary rounded bg-white">
+                            <p className="text-[10px] font-bold text-text-secondary uppercase">Token Status</p>
+                            <p className="text-xs text-dr7-green font-bold">VALiD</p>
+                         </div>
+                         <div className="p-3 border border-border-primary rounded bg-white">
+                            <p className="text-[10px] font-bold text-text-secondary uppercase">Last Sync</p>
+                            <p className="text-xs">Oggi, 09:45</p>
+                         </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-6">
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-4">
+                    <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
+                       <Sparkles size={16} className="text-dr7-teal" /> AI Configuration
+                    </h3>
+                    <div className="space-y-4">
+                       <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold">Gemini 1.5 Flash</span>
+                          <span className={`px-2 py-0.5 rounded-full font-black text-[9px] ${settings.geminiConnected ? 'bg-dr7-green text-white' : 'bg-gray-100 text-text-secondary'}`}>
+                             {settings.geminiConnected ? 'CONNECTED' : 'NOT CONFIGURED'}
+                          </span>
+                       </div>
+                       <p className="text-[11px] text-text-secondary leading-relaxed italic">
+                          Il sistema utilizza Gemini per l'ottimizzazione del messaggio e l'analisi dei lead. Configura la chiave API nel pannello di controllo cloud.
+                       </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-4">
+                    <h3 className="font-bold text-sm uppercase tracking-tight">System Policy</h3>
+                    <div className="space-y-3">
+                       <label className="flex items-center gap-3 cursor-pointer group">
+                          <input 
+                            type="checkbox" 
+                            className="w-4 h-4 rounded text-dr7-teal focus:ring-dr7-teal" 
+                            checked={settings.testMode}
+                            onChange={() => setSettings((prev: any) => ({ ...prev, testMode: !prev.testMode }))}
+                          />
+                          <span className="text-xs font-bold text-text-secondary group-hover:text-black transition-colors">Abilita Modalità Test</span>
+                       </label>
+                       <p className="text-[10px] text-text-muted italic pl-7">
+                          In modalità test, le campagne non verranno mai inviate realmente ai destinatari.
+                       </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -594,7 +1039,7 @@ function RecentScanRow({ name, date, target, status }: any) {
   );
 }
 
-function LeadTableRow({ name, phone, lists, status, date }: any) {
+function LeadTableRow({ name, phone, lists, status, date, onDelete }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group">
       <td className="p-4">
@@ -604,32 +1049,42 @@ function LeadTableRow({ name, phone, lists, status, date }: any) {
         </div>
       </td>
       <td className="p-4 text-text-secondary font-mono">{phone}</td>
-      <td className="p-4"><div className="flex gap-1.5 flex-wrap">{lists.map((l: string) => (<span key={l} className="px-2 py-0.5 bg-gray-100 border border-border-primary rounded text-[10px] font-bold text-text-secondary uppercase tracking-tighter">{l}</span>))}</div></td>
-      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${status === 'Attivo' ? 'bg-dr7-green text-white' : 'bg-dr7-red text-white'}`}>{status === 'Attivo' ? 'Verificato' : status}</span></td>
+      <td className="p-4"><div className="flex gap-1.5 flex-wrap">{lists.filter(Boolean).map((l: string) => (<span key={l} className="px-2 py-0.5 bg-gray-100 border border-border-primary rounded text-[10px] font-bold text-text-secondary uppercase tracking-tighter">{l}</span>))}</div></td>
+      <td className="p-4"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${status === 'Attivo' ? 'bg-dr7-green text-white' : 'bg-dr7-red text-white'}`}>{status}</span></td>
       <td className="p-4 text-xs text-text-secondary">{date}</td>
-      <td className="p-4 text-right"><div className="flex justify-end gap-1.5"><button className="btn-blue px-3 py-1 text-[10px] uppercase font-bold">Modifica</button><button className="btn-red px-3 py-1 text-[10px] uppercase font-bold">Elimina</button></div></td>
+      <td className="p-4 text-right"><div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"><button className="p-1 hover:text-dr7-red" onClick={onDelete}><Trash2 size={14} /></button></div></td>
     </tr>
   );
 }
 
-function CampaignTableRow({ name, list, status, date, recipients }: any) {
+function CampaignTableRow({ name, list, status, date, recipients, onDelete }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group">
-      <td className="p-4 align-top"><div className="space-y-1"><p className="font-bold text-black text-sm">{name}</p><p className="text-[11px] text-text-secondary">Lista: {list}</p><p className="text-[10px] text-text-secondary italic">Creato da: admin@dr7.app • {date}</p></div></td>
+      <td className="p-4 align-top"><div className="space-y-1"><p className="font-bold text-black text-sm">{name}</p><p className="text-[11px] text-text-secondary">Lista: {list}</p><p className="text-[10px] text-text-secondary italic">Creato il: {date}</p></div></td>
       <td className="p-4 text-text-secondary text-xs">{date}</td>
       <td className="p-4 text-xs font-semibold">{recipients > 0 ? recipients.toLocaleString() : 'N/A'}</td>
       <td className="p-4"><span className="flex items-center gap-2 text-xs font-medium text-text-secondary"><ImageIcon size={14} className="text-dr7-teal" /> Media</span></td>
-      <td className="p-4"><span className={`px-2.5 py-0.5 text-white text-[9px] font-bold rounded-full uppercase ${status === 'Inviata' ? 'bg-[#059669]' : status === 'Programmata' ? 'bg-[#2563EB]' : 'bg-gray-500'}`}>{status}</span></td>
-      <td className="p-4 text-right"><div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"><button className="btn-blue px-3 py-1 text-[10px] uppercase font-bold">Modifica</button><button className="btn-green px-3 py-1 text-[10px] uppercase font-bold">Invia</button></div></td>
+      <td className="p-4">
+        <span className={`px-2.5 py-0.5 text-white text-[9px] font-bold rounded-full uppercase ${
+          status === 'Inviata' ? 'bg-[#059669]' : 
+          status === 'Programmata' ? 'bg-[#2563EB]' : 
+          status === 'Simulata' ? 'bg-amber-500' :
+          'bg-gray-500'
+        }`}>{status}</span>
+      </td>
+      <td className="p-4 text-right"><div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"><button className="p-1 hover:text-dr7-red" onClick={onDelete}><Trash2 size={14} /></button></div></td>
     </tr>
   );
 }
 
-function RecipientOption({ label, count }: any) {
+function RecipientOption({ label, count, checked, onChange }: any) {
   return (
-    <label className="flex flex-col p-3 bg-gray-50 border border-border-primary rounded-md cursor-pointer hover:border-dr7-teal transition-all group">
-      <div className="flex justify-between items-center mb-1"><input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" /><span className="text-[9px] font-bold text-text-secondary bg-white px-1.5 py-0.5 border border-border-primary rounded">{count.toLocaleString()}</span></div>
-      <span className="text-[11px] font-bold uppercase tracking-tight group-hover:text-dr7-teal">{label}</span>
+    <label className={`flex flex-col p-3 border rounded-md cursor-pointer transition-all group ${checked ? 'bg-dr7-teal/5 border-dr7-teal' : 'bg-gray-50 border-border-primary hover:border-dr7-teal'}`}>
+      <div className="flex justify-between items-center mb-1">
+        <input type="radio" checked={checked} onChange={onChange} className="w-4 h-4 rounded-full border-gray-300 text-dr7-teal focus:ring-dr7-teal" />
+        <span className="text-[9px] font-bold text-text-secondary bg-white px-1.5 py-0.5 border border-border-primary rounded">{count.toLocaleString()}</span>
+      </div>
+      <span className={`text-[11px] font-bold uppercase tracking-tight ${checked ? 'text-dr7-teal' : 'group-hover:text-dr7-teal'}`}>{label}</span>
     </label>
   );
 }
