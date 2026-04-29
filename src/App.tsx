@@ -9,6 +9,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 import { translations, Language } from './translations';
 import { getMerchantContext } from './components/AuthGate';
+import { generateCodesForRecipients, buildTrackingUrl } from './lib/codes';
+import { RecipientsModal } from './components/RecipientsModal';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -76,6 +78,24 @@ const filterLeads = (leads: Lead[], query: string): Lead[] => {
     
     return false;
   });
+};
+
+const resolveRecipientLeads = (
+  mode: 'all' | 'broadcast' | 'manual',
+  selectedBroadcastIds: string[],
+  selectedLeadIds: string[],
+  allLeads: Lead[],
+  allBroadcastLists: BroadcastList[]
+): Lead[] => {
+  if (mode === 'all') return allLeads;
+  if (mode === 'broadcast') {
+    const ids = new Set<string>();
+    allBroadcastLists
+      .filter(bl => selectedBroadcastIds.includes(bl.id))
+      .forEach(bl => bl.leadIds.forEach(id => ids.add(id)));
+    return allLeads.filter(l => ids.has(l.id));
+  }
+  return allLeads.filter(l => selectedLeadIds.includes(l.id));
 };
 
 const COLUMN_ALIASES = {
@@ -160,6 +180,19 @@ interface CampaignSchedule {
   conditionMatchType: 'all' | 'any';
 }
 
+interface CampaignRecipient {
+  id: string;
+  leadId: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  code: string;
+  clickCount: number;
+  redeemed: boolean;
+  redeemedAt?: string;
+  conversionValue?: number;
+}
+
 interface Campaign {
   id: string;
   name: string;
@@ -171,6 +204,8 @@ interface Campaign {
   createdAt: string;
   schedule?: CampaignSchedule;
   media?: { type: 'image' | 'video', url: string };
+  recipients?: CampaignRecipient[];
+  trackingBaseUrl?: string;
 }
 
 interface BroadcastList {
@@ -462,6 +497,9 @@ export default function App() {
     conditionMatchType: 'all'
   };
 
+  // --- Recipients Modal ---
+  const [recipientsModalCampaignId, setRecipientsModalCampaignId] = useState<string | null>(null);
+
   // --- Broadcast List State ---
   const [isBroadcastListModalOpen, setIsBroadcastListModalOpen] = useState(false);
   const [editingBroadcastList, setEditingBroadcastList] = useState<BroadcastList | null>(null);
@@ -524,8 +562,32 @@ export default function App() {
       }
     }
 
+    const campaignId = `camp-${Date.now()}`;
+    const recipientLeads = resolveRecipientLeads(
+      newCampaign.recipientMode!,
+      newCampaign.selectedBroadcastIds || [],
+      newCampaign.selectedLeadIds || [],
+      leads,
+      broadcastLists
+    );
+    const existingCodes = campaigns.flatMap(c => c.recipients?.map(r => r.code) ?? []);
+    const recipientsWithCodes = generateCodesForRecipients(
+      recipientLeads.map(l => ({ firstName: l.firstName, lastName: l.lastName, leadId: l.id, phone: l.phone })),
+      existingCodes
+    );
+    const recipients: CampaignRecipient[] = recipientsWithCodes.map((r, i) => ({
+      id: `rcp-${campaignId}-${i}`,
+      leadId: r.leadId,
+      firstName: r.firstName,
+      lastName: r.lastName ?? '',
+      phone: r.phone,
+      code: r.code,
+      clickCount: 0,
+      redeemed: false,
+    }));
+
     const campaign: Campaign = {
-      id: `camp-${Date.now()}`,
+      id: campaignId,
       name: newCampaign.name!,
       message: newCampaign.message!,
       recipientMode: newCampaign.recipientMode!,
@@ -533,7 +595,9 @@ export default function App() {
       selectedLeadIds: newCampaign.selectedLeadIds || [],
       status: settings.whatsappConnected ? status : 'Simulata',
       createdAt: new Date().toISOString(),
-      schedule: newCampaign.schedule ? { ...newCampaign.schedule } : undefined
+      schedule: newCampaign.schedule ? { ...newCampaign.schedule } : undefined,
+      recipients,
+      trackingBaseUrl: settings.trackingBaseUrl || window.location.origin,
     };
 
     setCampaigns(prev => [campaign, ...prev]);
@@ -695,7 +759,7 @@ export default function App() {
                 </div>
               )}
               <div className={`flex ${sidebarOpen ? 'gap-1' : 'flex-col gap-2'}`}>
-                {(['it', 'en', 'es'] as Language[]).map((lang) => (
+                {(['it', 'en'] as Language[]).map((lang) => (
                   <button
                     key={lang}
                     onClick={() => setLanguage(lang)}
@@ -708,7 +772,7 @@ export default function App() {
                       }
                     `}
                   >
-                    {lang === 'it' ? 'ITA' : lang === 'en' ? 'ENG' : 'ESP'}
+                    {lang === 'it' ? 'ITA' : 'ENG'}
                   </button>
                 ))}
               </div>
@@ -1358,20 +1422,22 @@ export default function App() {
                          if (activeSubTab === 'report') return ['Inviata', 'Simulata', 'Fallita'].includes(c.status);
                          return true;
                       }).map(campaign => (
-                         <CampaignTableRow 
-                            key={campaign.id} 
-                            name={campaign.name} 
-                            recipientMode={campaign.recipientMode} 
-                            status={campaign.status} 
-                            date={new Date(campaign.createdAt).toLocaleDateString()} 
-                            uniqueCount={(() => {
+                         <CampaignTableRow
+                            key={campaign.id}
+                            name={campaign.name}
+                            recipientMode={campaign.recipientMode}
+                            status={campaign.status}
+                            date={new Date(campaign.createdAt).toLocaleDateString()}
+                            uniqueCount={campaign.recipients?.length ?? (() => {
                               if (campaign.recipientMode === 'all') return leads.length;
                               if (campaign.recipientMode === 'broadcast') {
                                 const selected = broadcastLists.filter(bl => campaign.selectedBroadcastIds?.includes(bl.id));
                                 return new Set(selected.flatMap(bl => bl.leadIds)).size;
                               }
                               return campaign.selectedLeadIds?.length || 0;
-                            })()} 
+                            })()}
+                            hasRecipients={(campaign.recipients?.length ?? 0) > 0}
+                            onShowRecipients={() => setRecipientsModalCampaignId(campaign.id)}
                             onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
                             schedule={campaign.schedule}
                             getSummary={getScheduleSummary}
@@ -2055,7 +2121,7 @@ export default function App() {
 
       <AnimatePresence>
         {isSelectLeadsModalOpen && (
-          <SelectLeadsModal 
+          <SelectLeadsModal
             onClose={() => setIsSelectLeadsModalOpen(false)}
             leads={leads}
             selectedIds={newCampaign.selectedLeadIds || []}
@@ -2070,6 +2136,17 @@ export default function App() {
             t={t}
           />
         )}
+
+        {recipientsModalCampaignId && (() => {
+          const c = campaigns.find(x => x.id === recipientsModalCampaignId);
+          if (!c) return null;
+          return (
+            <RecipientsModal
+              campaign={c}
+              onClose={() => setRecipientsModalCampaignId(null)}
+            />
+          );
+        })()}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -2493,7 +2570,7 @@ function LeadTableRow({ name, phone, lists, status, date, source, onDelete }: an
   );
 }
 
-function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, onDelete, schedule, getSummary }: any) {
+function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, hasRecipients, onShowRecipients, onDelete, schedule, getSummary }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group border-b border-border-primary last:border-0">
       <td className="p-4 align-top">
@@ -2551,11 +2628,20 @@ function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, onDe
         </div>
       </td>
       <td className="p-4 text-right align-top">
-        <div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-           <button className="p-2 bg-white border border-border-primary hover:text-dr7-teal rounded shadow-sm transition-all" title="Edit">
+        <div className="flex justify-end gap-1.5">
+           {hasRecipients && (
+             <button
+               onClick={onShowRecipients}
+               className="px-2.5 py-1.5 bg-dr7-teal text-white text-[10px] font-bold uppercase rounded shadow-sm hover:bg-dr7-teal/90 transition-all"
+               title="Vedi codici, link e QR"
+             >
+                Codici / QR
+             </button>
+           )}
+           <button className="p-2 bg-white border border-border-primary hover:text-dr7-teal rounded shadow-sm transition-all opacity-0 group-hover:opacity-100" title="Edit">
               <Settings size={14} />
            </button>
-           <button className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all" onClick={onDelete} title="Delete">
+           <button className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all opacity-0 group-hover:opacity-100" onClick={onDelete} title="Delete">
               <Trash2 size={14} />
            </button>
         </div>
