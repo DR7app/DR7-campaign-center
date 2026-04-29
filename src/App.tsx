@@ -8,6 +8,16 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 
+// --- Helpers ---
+const normalizePhone = (phone: string): string => {
+  // Remove spaces, dashes, dots, brackets, and any non-numeric characters except +
+  let cleaned = phone.replace(/[\s\-\.\(\)]/g, '');
+  // Replace leading 00 with +
+  if (cleaned.startsWith('00')) cleaned = '+' + cleaned.substring(2);
+  // Keep only digits for internal normalization/comparison
+  return cleaned.replace(/\D/g, '');
+};
+
 // --- Types ---
 type Section = 'dashboard' | 'leads' | 'lists' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai';
 
@@ -16,11 +26,23 @@ interface Lead {
   firstName: string;
   lastName: string;
   phone: string;
+  phoneNormalized: string;
   email?: string;
   tags: string[];
   list: string;
   consent: 'Attivo' | 'Inattivo';
+  notes?: string;
+  source: string;
   createdAt: string;
+}
+
+interface ImportPreviewStats {
+  totalRows: number;
+  validUnique: number;
+  duplicatesInFile: number;
+  alreadyExisting: number;
+  invalidRows: number;
+  finalToImport: number;
 }
 
 interface TimeWindow {
@@ -122,30 +144,107 @@ export default function App() {
   }, [settings]);
 
   // --- Handlers ---
-  const handleImportLeads = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // --- Import State ---
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importStats, setImportStats] = useState<ImportPreviewStats | null>(null);
+  const [leadsToImport, setLeadsToImport] = useState<Lead[]>([]);
+  const [skippedRows, setSkippedRows] = useState<{ row: any; reason: string }[]>([]);
 
+  const processCSVFile = (file: File) => {
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
       complete: (results) => {
-        const newLeads: Lead[] = results.data.map((row: any, i) => ({
-          id: `lead-${Date.now()}-${i}`,
-          firstName: row.firstName || row.Nome || '',
-          lastName: row.lastName || row.Cognome || '',
-          phone: row.phone || row.Cellulare || '',
-          email: row.email || row.Email || '',
-          tags: row.tags ? row.tags.split(',') : [],
-          list: row.list || 'Generale',
-          consent: 'Attivo' as const,
-          createdAt: new Date().toISOString()
-        })).filter(l => l.phone);
+        const rawData = results.data;
+        const seenInFile = new Set<string>();
+        const validUniques: Lead[] = [];
+        const skipped: { row: any; reason: string }[] = [];
         
-        setLeads(prev => [...prev, ...newLeads]);
-        alert(`Importati ${newLeads.length} lead con successo.`);
+        let dupesInFile = 0;
+        let alreadyExist = 0;
+        let invalid = 0;
+
+        rawData.forEach((row: any, i) => {
+          // Flexible mapping
+          const firstName = (row.firstName || row.first_name || row.Nome || row.nome || row.Name || row.name || '').trim();
+          const lastName = (row.lastName || row.last_name || row.surname || row.Cognome || row.cognome || '').trim();
+          const phoneInput = (row.phone || row.phone_number || row.phoneNumber || row.whatsapp || row.WhatsApp || row.mobile || row.cellulare || row.telefono || row.numero || row.Numero || '').toString().trim();
+          const email = (row.email || row.Email || row['e-mail'] || '').trim();
+          const tags = (row.tags || row.tag || row.Tags || row.Tag || '').split(',').map((t: string) => t.trim()).filter(Boolean);
+          const listName = (row.list || row.Lista || row.lista || row.segment || row.segmento || 'Generale').trim();
+          const notes = (row.notes || row.note || row.Notes || row.Note || '').trim();
+
+          if (!firstName || !phoneInput) {
+            invalid++;
+            skipped.push({ row, reason: 'Mancano campi obbligatori (Nome o Telefono)' });
+            return;
+          }
+
+          const phoneNormalized = normalizePhone(phoneInput);
+          if (phoneNormalized.length < 8) {
+            invalid++;
+            skipped.push({ row, reason: 'Numero di telefono non valido o troppo corto' });
+            return;
+          }
+
+          if (seenInFile.has(phoneNormalized)) {
+            dupesInFile++;
+            skipped.push({ row, reason: 'Duplicato nel file' });
+            return;
+          }
+
+          if (leads.some(l => l.phoneNormalized === phoneNormalized)) {
+            alreadyExist++;
+            skipped.push({ row, reason: 'Già presente nel database' });
+            return;
+          }
+
+          seenInFile.add(phoneNormalized);
+          validUniques.push({
+            id: `import-${Date.now()}-${i}`,
+            firstName,
+            lastName,
+            phone: phoneInput,
+            phoneNormalized,
+            email,
+            tags,
+            list: listName,
+            consent: 'Attivo',
+            notes,
+            source: 'CSV Import',
+            createdAt: new Date().toISOString()
+          });
+        });
+
+        setLeadsToImport(validUniques);
+        setSkippedRows(skipped);
+        setImportStats({
+          totalRows: rawData.length,
+          validUnique: validUniques.length,
+          duplicatesInFile: dupesInFile,
+          alreadyExisting: alreadyExist,
+          invalidRows: invalid,
+          finalToImport: validUniques.length
+        });
+        setIsImportModalOpen(true);
       }
     });
+  };
+
+  const handleConfirmImport = () => {
+    setLeads(prev => [...leadsToImport, ...prev]);
+    setIsImportModalOpen(false);
+    setLeadsToImport([]);
+    setImportStats(null);
+    setSkippedRows([]);
+    alert(`Importazione completata: ${leadsToImport.length} lead aggiunti.`);
+  };
+
+  const handleImportLeads = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processCSVFile(file);
+    e.target.value = ''; // Reset input
   };
 
   // --- Lead Form State ---
@@ -159,12 +258,14 @@ export default function App() {
 
   const handleCreateLead = () => {
     const errors: Record<string, string> = {};
+    const normPhone = normalizePhone(newLeadForm.phone);
+
     if (!newLeadForm.firstName.trim()) errors.firstName = 'Il nome è obbligatorio.';
     if (!newLeadForm.phone.trim()) {
       errors.phone = 'Il numero di telefono è obbligatorio.';
-    } else if (!/^\+?[\d\s-]{8,20}$/.test(newLeadForm.phone.trim())) {
+    } else if (normPhone.length < 8) {
       errors.phone = 'Inserisci un numero di telefono valido.';
-    } else if (leads.some(l => l.phone.replace(/\s+/g, '') === newLeadForm.phone.replace(/\s+/g, ''))) {
+    } else if (leads.some(l => l.phoneNormalized === normPhone)) {
       errors.phone = 'Un lead con questo numero esiste già.';
     }
 
@@ -178,9 +279,11 @@ export default function App() {
       firstName: newLeadForm.firstName.trim(),
       lastName: newLeadForm.lastName.trim(),
       phone: newLeadForm.phone.trim(),
+      phoneNormalized: normPhone,
       tags: [],
       list: 'Generale',
       consent: 'Attivo',
+      source: 'Inserimento Manuale',
       createdAt: new Date().toISOString()
     };
 
@@ -980,6 +1083,7 @@ export default function App() {
                             lists={[lead.list, ...lead.tags]} 
                             status={lead.consent} 
                             date={new Date(lead.createdAt).toLocaleDateString()} 
+                            source={lead.source}
                             onDelete={() => setLeads(prev => prev.filter(l => l.id !== lead.id))}
                           />
                         ))}
@@ -1292,7 +1396,268 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* --- New Lead Modal --- */}
+      {/* --- Import Lead Modal --- */}
+      <AnimatePresence>
+        {isImportModalOpen && importStats && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsImportModalOpen(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50">
+                <div>
+                  <h3 className="font-bold text-lg uppercase tracking-tight">Anteprima Importazione</h3>
+                  <p className="text-[10px] text-text-secondary uppercase">Riepilogo dati e deduplicazione automatica</p>
+                </div>
+                <button 
+                  onClick={() => setIsImportModalOpen(false)}
+                  className="p-1 hover:bg-gray-200 rounded-full text-text-secondary transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="p-3 bg-gray-50 border border-border-primary rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">Totali CSV</p>
+                    <p className="text-xl font-black">{importStats.totalRows}</p>
+                  </div>
+                  <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-dr7-teal uppercase mb-1">Validi</p>
+                    <p className="text-xl font-black text-dr7-teal">{importStats.validUnique}</p>
+                  </div>
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Duplicati CSV</p>
+                    <p className="text-xl font-black text-amber-700">{importStats.duplicatesInFile}</p>
+                  </div>
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Esistenti</p>
+                    <p className="text-xl font-black text-blue-700">{importStats.alreadyExisting}</p>
+                  </div>
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-dr7-red uppercase mb-1">Invalidi</p>
+                    <p className="text-xl font-black text-dr7-red">{importStats.invalidRows}</p>
+                  </div>
+                </div>
+
+                {/* Tabs for Preview / Skipped */}
+                <div className="space-y-4">
+                  <div className="flex gap-4 border-b border-border-primary">
+                    <button className="pb-2 text-xs font-bold uppercase tracking-widest text-dr7-teal border-b-2 border-dr7-teal">
+                      Lead da Importare ({leadsToImport.length})
+                    </button>
+                    <button className="pb-2 text-xs font-bold uppercase tracking-widest text-text-secondary">
+                      Righe Escluse ({skippedRows.length})
+                    </button>
+                  </div>
+
+                  <div className="bg-white border border-border-primary rounded-lg overflow-hidden">
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-gray-50 border-b border-border-primary sticky top-0">
+                          <tr>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Nome</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Telefono</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Norm.</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Email</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Lista</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border-primary">
+                          {leadsToImport.map((l, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="p-2 font-bold">{l.firstName} {l.lastName}</td>
+                              <td className="p-2 font-mono">{l.phone}</td>
+                              <td className="p-2 font-mono text-text-muted">{l.phoneNormalized}</td>
+                              <td className="p-2">{l.email || '-'}</td>
+                              <td className="p-2 uppercase font-bold text-[9px]"><span className="bg-gray-100 px-1 py-0.5 rounded">{l.list}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 border-t border-border-primary flex justify-between items-center">
+                <div className="text-xs text-text-secondary font-medium italic">
+                  Verranno importati <strong>{leadsToImport.length}</strong> lead unici nel database.
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setIsImportModalOpen(false)}
+                    className="bg-white border border-border-primary px-6 py-2 rounded-md text-xs font-bold uppercase tracking-tight hover:bg-gray-100 transition-all"
+                  >
+                    Annulla
+                  </button>
+                  <button 
+                    onClick={handleConfirmImport}
+                    disabled={leadsToImport.length === 0}
+                    className="btn-teal px-8 py-2 rounded-md text-xs font-bold uppercase tracking-tight shadow-md disabled:opacity-50"
+                  >
+                    Conferma Import
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      {/* --- Import Lead Modal --- */}
+      <AnimatePresence>
+        {isImportModalOpen && importStats && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setIsImportModalOpen(false)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-4xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50">
+                <div>
+                  <h3 className="font-bold text-lg uppercase tracking-tight">Anteprima Importazione</h3>
+                  <p className="text-[10px] text-text-secondary uppercase">Riepilogo dati e deduplicazione automatica</p>
+                </div>
+                <button 
+                  onClick={() => setIsImportModalOpen(false)}
+                  className="p-1 hover:bg-gray-200 rounded-full text-text-secondary transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Stats Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="p-3 bg-gray-50 border border-border-primary rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">Totali CSV</p>
+                    <p className="text-xl font-black">{importStats.totalRows}</p>
+                  </div>
+                  <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-dr7-teal uppercase mb-1">Validi</p>
+                    <p className="text-xl font-black text-dr7-teal">{importStats.validUnique}</p>
+                  </div>
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Duplicati CSV</p>
+                    <p className="text-xl font-black text-amber-700">{importStats.duplicatesInFile}</p>
+                  </div>
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Esistenti</p>
+                    <p className="text-xl font-black text-blue-700">{importStats.alreadyExisting}</p>
+                  </div>
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-center">
+                    <p className="text-[10px] font-bold text-dr7-red uppercase mb-1">Invalidi</p>
+                    <p className="text-xl font-black text-dr7-red">{importStats.invalidRows}</p>
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="space-y-4">
+                  <div className="bg-white border border-border-primary rounded-lg overflow-hidden">
+                    <div className="p-3 bg-gray-50 border-b border-border-primary flex justify-between items-center">
+                       <span className="text-[10px] font-bold uppercase tracking-widest text-text-secondary">Pronti per l'invio ({leadsToImport.length})</span>
+                    </div>
+                    <div className="max-h-[300px] overflow-y-auto">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-gray-50 border-b border-border-primary sticky top-0">
+                          <tr>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Nome</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Telefono</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Email</th>
+                            <th className="p-2 font-bold uppercase text-text-secondary">Lista</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border-primary">
+                          {leadsToImport.map((l, idx) => (
+                            <tr key={idx} className="hover:bg-gray-50">
+                              <td className="p-2 font-bold">{l.firstName} {l.lastName}</td>
+                              <td className="p-2 font-mono">{l.phone}</td>
+                              <td className="p-2">{l.email || '-'}</td>
+                              <td className="p-2 uppercase font-bold text-[9px]"><span className="bg-gray-100 px-1 py-0.5 rounded">{l.list}</span></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {skippedRows.length > 0 && (
+                    <div className="bg-white border border-border-primary rounded-lg overflow-hidden">
+                      <div className="p-3 bg-red-50 border-b border-red-100 flex justify-between items-center">
+                         <span className="text-[10px] font-bold uppercase tracking-widest text-dr7-red">Righe Escluse ({skippedRows.length})</span>
+                      </div>
+                      <div className="max-h-[200px] overflow-y-auto">
+                        <table className="w-full text-left text-[10px]">
+                          <thead className="bg-gray-50 border-b border-border-primary sticky top-0">
+                            <tr>
+                              <th className="p-2 font-bold uppercase text-text-secondary">Motivo</th>
+                              <th className="p-2 font-bold uppercase text-text-secondary">Dati Originali</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-border-primary">
+                            {skippedRows.slice(0, 50).map((s, idx) => (
+                              <tr key={idx} className="hover:bg-gray-50">
+                                <td className="p-2 text-dr7-red font-bold">{s.reason}</td>
+                                <td className="p-2 text-text-muted truncate max-w-xs">{JSON.stringify(s.row)}</td>
+                              </tr>
+                            ))}
+                            {skippedRows.length > 50 && (
+                              <tr>
+                                <td colSpan={2} className="p-2 text-center text-text-secondary italic">...e altre {skippedRows.length - 50} righe</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-6 bg-gray-50 border-t border-border-primary flex justify-between items-center">
+                <div className="text-xs text-text-secondary font-medium">
+                  Verranno importati <strong>{leadsToImport.length}</strong> lead. Duplicati e invalidi sono stati rimossi automaticamente.
+                </div>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={() => setIsImportModalOpen(false)}
+                    className="bg-white border border-border-primary px-6 py-2 rounded-md text-xs font-bold uppercase tracking-tight hover:bg-gray-100 transition-all"
+                  >
+                    Annulla
+                  </button>
+                  <button 
+                    onClick={handleConfirmImport}
+                    disabled={leadsToImport.length === 0}
+                    className="btn-teal px-8 py-2 rounded-md text-xs font-bold uppercase tracking-tight shadow-md disabled:opacity-50"
+                  >
+                    Conferma Import
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isLeadModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1477,13 +1842,16 @@ function RecentScanRow({ name, date, target, status }: any) {
   );
 }
 
-function LeadTableRow({ name, phone, lists, status, date, onDelete }: any) {
+function LeadTableRow({ name, phone, lists, status, date, source, onDelete }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group">
       <td className="p-4">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-[10px] font-bold text-text-secondary border border-border-primary">{name.split(' ').map((n: string) => n[0]).join('')}</div>
-          <span className="font-bold text-black">{name}</span>
+          <div className="flex flex-col">
+            <span className="font-bold text-black text-sm">{name}</span>
+            <span className="text-[9px] text-text-muted uppercase font-bold tracking-tighter">{source || 'Manuale'}</span>
+          </div>
         </div>
       </td>
       <td className="p-4 text-text-secondary font-mono">{phone}</td>
