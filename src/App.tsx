@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Users, Send, Calendar, History, Settings, LayoutDashboard, Plus, 
-  Image as ImageIcon, Video, MessageSquare, Search, Bell, MoreVertical, 
+import {
+  Users, Send, Calendar, History, Settings, LayoutDashboard, Plus,
+  Image as ImageIcon, Video, MessageSquare, Search, Bell, MoreVertical,
   CheckCircle2, Clock, Sparkles, ChevronRight, Filter, AlertTriangle,
-  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X, Globe
+  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X, Globe, LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
 import { translations, Language } from './translations';
+import { getMerchantContext } from './components/AuthGate';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -715,8 +716,29 @@ export default function App() {
           </div>
         </nav>
 
-        <div className="p-4 border-t border-border-primary">
-          <button 
+        <div className="p-4 border-t border-border-primary space-y-2">
+          {(() => {
+            const ctx = getMerchantContext();
+            if (!ctx) return null;
+            return (
+              <div className={`flex items-center gap-2 ${sidebarOpen ? 'justify-between' : 'justify-center'}`}>
+                {sidebarOpen && (
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest leading-none mb-1">Attivit&agrave;</p>
+                    <p className="text-xs font-bold text-black truncate">{ctx.merchant.name}</p>
+                  </div>
+                )}
+                <button
+                  onClick={() => ctx.signOut()}
+                  title="Esci"
+                  className="w-8 h-8 flex items-center justify-center rounded-md border border-border-primary text-text-secondary hover:text-dr7-red hover:border-dr7-red/40 transition-all shrink-0"
+                >
+                  <LogOut size={14} />
+                </button>
+              </div>
+            );
+          })()}
+          <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="w-full h-10 flex items-center justify-center bg-gray-50 border border-border-primary rounded-md text-text-secondary hover:text-dr7-teal hover:border-dr7-teal/50 transition-all"
           >

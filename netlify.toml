@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Tracking redirect: /c/{code} → invokes track-click function which logs + 302s
+[[redirects]]
+  from = "/c/*"
+  to   = "/.netlify/functions/track-click/:splat"
+  status = 200
+
+# SPA fallback (Vite app)
+[[redirects]]
+  from = "/*"
+  to   = "/index.html"
+  status = 200
