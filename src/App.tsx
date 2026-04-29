@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Users, Send, Calendar, History, Settings, LayoutDashboard, Plus,
   Image as ImageIcon, Video, MessageSquare, Search, Bell, MoreVertical,
   CheckCircle2, Clock, Sparkles, ChevronRight, Filter, AlertTriangle,
-  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X, Globe, LogOut
+  Menu, ArrowLeft, MoreHorizontal, Share2, Eye, FileUp, Trash2, X, Globe, LogOut,
+  Gift, Receipt, UserCheck, Mail, Lock, QrCode
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Papa from 'papaparse';
@@ -11,6 +12,11 @@ import { translations, Language } from './translations';
 import { getMerchantContext } from './components/AuthGate';
 import { generateCodesForRecipients, buildTrackingUrl } from './lib/codes';
 import { RecipientsModal } from './components/RecipientsModal';
+import { RiscattiPanel } from './components/RiscattiPanel';
+import { VenditePanel } from './components/VenditePanel';
+import { ClientiPanel } from './components/ClientiPanel';
+import { MessaggiPanel } from './components/MessaggiPanel';
+import { WhatsappPaywallModal } from './components/WhatsappPaywallModal';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
@@ -123,7 +129,7 @@ const findMappedColumn = (row: any, aliases: string[]): string => {
 };
 
 // --- Types ---
-type Section = 'dashboard' | 'leads' | 'broadcast' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai' | 'media';
+type Section = 'dashboard' | 'leads' | 'broadcast' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai' | 'media' | 'messaggi' | 'riscatti' | 'vendite' | 'clienti';
 
 interface Lead {
   id: string;
@@ -186,11 +192,17 @@ interface CampaignRecipient {
   firstName: string;
   lastName: string;
   phone: string;
+  email?: string;
   code: string;
   clickCount: number;
+  firstClickAt?: string;
+  lastClickAt?: string;
   redeemed: boolean;
   redeemedAt?: string;
   conversionValue?: number;
+  conversionType?: string;
+  conversionNote?: string;
+  channel?: 'manual' | 'whatsapp' | 'landing' | 'webhook' | 'booking';
 }
 
 interface Campaign {
@@ -500,6 +512,43 @@ export default function App() {
   // --- Recipients Modal ---
   const [recipientsModalCampaignId, setRecipientsModalCampaignId] = useState<string | null>(null);
 
+  // --- WhatsApp paywall ---
+  const [whatsappPaywallOpen, setWhatsappPaywallOpen] = useState(false);
+
+  // --- Conversion types (per merchant; default list) ---
+  const conversionTypes = useMemo(() => {
+    const saved = localStorage.getItem('dr7_conversion_types');
+    if (saved) {
+      try { return JSON.parse(saved) as string[]; } catch { /* ignore */ }
+    }
+    return ['Vendita', 'Noleggio completato', 'Servizio', 'Prenotazione', 'Altro'];
+  }, []);
+
+  // --- Redemption handler ---
+  const handleRedeem = (payload: {
+    campaignId: string;
+    recipientId: string;
+    conversionType: string;
+    conversionValue: number;
+    conversionNote: string;
+  }) => {
+    setCampaigns(prev => prev.map(c => {
+      if (c.id !== payload.campaignId) return c;
+      return {
+        ...c,
+        recipients: (c.recipients ?? []).map(r => r.id === payload.recipientId ? {
+          ...r,
+          redeemed: true,
+          redeemedAt: new Date().toISOString(),
+          conversionValue: payload.conversionValue,
+          conversionType: payload.conversionType,
+          conversionNote: payload.conversionNote,
+          channel: 'manual' as const,
+        } : r),
+      };
+    }));
+  };
+
   // --- Broadcast List State ---
   const [isBroadcastListModalOpen, setIsBroadcastListModalOpen] = useState(false);
   const [editingBroadcastList, setEditingBroadcastList] = useState<BroadcastList | null>(null);
@@ -695,18 +744,46 @@ export default function App() {
               onClick={() => setActiveSection('broadcast')} 
               collapsed={!sidebarOpen}
             />
-            <SidebarItem 
-              icon={Send} 
-              label={t('sidebar.campaigns')} 
-              active={activeSection === 'campaigns'} 
-              onClick={() => setActiveSection('campaigns')} 
+            <SidebarItem
+              icon={Send}
+              label={t('sidebar.campaigns')}
+              active={activeSection === 'campaigns'}
+              onClick={() => setActiveSection('campaigns')}
               collapsed={!sidebarOpen}
             />
-            <SidebarItem 
-              icon={ImageIcon} 
-              label={t('sidebar.media')} 
-              active={activeSection === 'media'} 
-              onClick={() => setActiveSection('media')} 
+            <SidebarItem
+              icon={MessageSquare}
+              label="Messaggi"
+              active={activeSection === 'messaggi'}
+              onClick={() => setActiveSection('messaggi')}
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem
+              icon={Gift}
+              label="Riscatti"
+              active={activeSection === 'riscatti'}
+              onClick={() => setActiveSection('riscatti')}
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem
+              icon={Receipt}
+              label="Vendite"
+              active={activeSection === 'vendite'}
+              onClick={() => setActiveSection('vendite')}
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem
+              icon={UserCheck}
+              label="Clienti"
+              active={activeSection === 'clienti'}
+              onClick={() => setActiveSection('clienti')}
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem
+              icon={ImageIcon}
+              label={t('sidebar.media')}
+              active={activeSection === 'media'}
+              onClick={() => setActiveSection('media')}
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
@@ -1786,6 +1863,38 @@ export default function App() {
             </motion.div>
           )}
 
+          {activeSection === 'riscatti' && (
+            <motion.div key="riscatti" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <RiscattiPanel
+                campaigns={campaigns}
+                conversionTypes={conversionTypes}
+                onRedeem={handleRedeem}
+              />
+            </motion.div>
+          )}
+
+          {activeSection === 'vendite' && (
+            <motion.div key="vendite" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <VenditePanel campaigns={campaigns} />
+            </motion.div>
+          )}
+
+          {activeSection === 'clienti' && (
+            <motion.div key="clienti" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <ClientiPanel leads={leads} campaigns={campaigns} />
+            </motion.div>
+          )}
+
+          {activeSection === 'messaggi' && (
+            <motion.div key="messaggi" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+              <MessaggiPanel
+                campaigns={campaigns}
+                whatsappConnected={settings.whatsappConnected}
+                onUnlockWhatsapp={() => setWhatsappPaywallOpen(true)}
+              />
+            </motion.div>
+          )}
+
           {activeSection === 'calendar' && (
             <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.calendar')}</h1>
@@ -2147,6 +2256,15 @@ export default function App() {
             />
           );
         })()}
+
+        <WhatsappPaywallModal
+          open={whatsappPaywallOpen}
+          onClose={() => setWhatsappPaywallOpen(false)}
+          onActivate={() => {
+            alert('Per attivare WhatsApp Business contattaci a info@dr7.it');
+            setWhatsappPaywallOpen(false);
+          }}
+        />
       </AnimatePresence>
 
       <AnimatePresence>
