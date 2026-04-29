@@ -10,12 +10,47 @@ import Papa from 'papaparse';
 
 // --- Helpers ---
 const normalizePhone = (phone: string): string => {
-  // Remove spaces, dashes, dots, brackets, and any non-numeric characters except +
-  let cleaned = phone.replace(/[\s\-\.\(\)]/g, '');
-  // Replace leading 00 with +
-  if (cleaned.startsWith('00')) cleaned = '+' + cleaned.substring(2);
-  // Keep only digits for internal normalization/comparison
-  return cleaned.replace(/\D/g, '');
+  if (!phone) return "";
+  let val = phone.toString().trim();
+  
+  // Remove all non-digit characters
+  let digits = val.replace(/\D/g, '');
+  
+  // Handle 00 prefix (e.g., 0039 -> 39)
+  if (digits.startsWith('00')) {
+    digits = digits.substring(2);
+  }
+  
+  // Italian specific: if 10 digits starting with 3, assume Italian and add 39
+  if (digits.length === 10 && digits.startsWith('3')) {
+    digits = '39' + digits;
+  }
+  
+  return digits;
+};
+
+const COLUMN_ALIASES = {
+  firstName: ['nome', 'name', 'first name', 'first_name', 'firstname', 'lead name'],
+  lastName: ['cognome', 'surname', 'last name', 'last_name', 'lastname'],
+  phone: [
+    'telefono', 'tel', 'phone', 'phone number', 'phone_number', 'phonenumber', 
+    'mobile', 'cellulare', 'whatsapp', 'whatsapp number', 'numero', 
+    'numero telefono', 'numero_telefono'
+  ]
+};
+
+const findMappedColumn = (row: any, aliases: string[]): string => {
+  const keys = Object.keys(row);
+  const matchedKey = keys.find(key => {
+    const normalizedKey = key.trim().toLowerCase()
+      .replace(/[\s\-_]/g, '')
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, ""); // Remove accents
+    return aliases.some(alias => {
+      const normalizedAlias = alias.toLowerCase().replace(/[\s\-_]/g, '');
+      return normalizedKey === normalizedAlias;
+    });
+  });
+  return matchedKey ? (row[matchedKey] || '').toString().trim() : '';
 };
 
 // --- Types ---
@@ -34,6 +69,8 @@ interface Lead {
   notes?: string;
   source: string;
   createdAt: string;
+  updatedAt?: string;
+  importedAt?: string;
 }
 
 interface ImportPreviewStats {
@@ -157,6 +194,10 @@ export default function App() {
       skipEmptyLines: true,
       complete: (results) => {
         const rawData = results.data;
+        if (rawData.length === 0) return;
+
+        console.log('Import Debug - Headers detected:', Object.keys(rawData[0]));
+
         const seenInFile = new Set<string>();
         const validUniques: Lead[] = [];
         const skipped: { row: any; reason: string }[] = [];
@@ -166,56 +207,65 @@ export default function App() {
         let invalid = 0;
 
         rawData.forEach((row: any, i) => {
-          // Flexible mapping
-          const firstName = (row.firstName || row.first_name || row.Nome || row.nome || row.Name || row.name || '').trim();
-          const lastName = (row.lastName || row.last_name || row.surname || row.Cognome || row.cognome || '').trim();
-          const phoneInput = (row.phone || row.phone_number || row.phoneNumber || row.whatsapp || row.WhatsApp || row.mobile || row.cellulare || row.telefono || row.numero || row.Numero || '').toString().trim();
-          const email = (row.email || row.Email || row['e-mail'] || '').trim();
-          const tags = (row.tags || row.tag || row.Tags || row.Tag || '').split(',').map((t: string) => t.trim()).filter(Boolean);
-          const listName = (row.list || row.Lista || row.lista || row.segment || row.segmento || 'Generale').trim();
-          const notes = (row.notes || row.note || row.Notes || row.Note || '').trim();
+          // Robust column mapping with aliases
+          const firstName = findMappedColumn(row, COLUMN_ALIASES.firstName);
+          const lastName = findMappedColumn(row, COLUMN_ALIASES.lastName);
+          const phoneInput = findMappedColumn(row, COLUMN_ALIASES.phone);
 
-          if (!firstName || !phoneInput) {
+          // Validation: Required fields check
+          if (!firstName) {
             invalid++;
-            skipped.push({ row, reason: 'Mancano campi obbligatori (Nome o Telefono)' });
+            skipped.push({ row, reason: 'Nome mancante' });
             return;
           }
 
+          if (!phoneInput) {
+            invalid++;
+            skipped.push({ row, reason: 'Telefono mancante' });
+            return;
+          }
+
+          // Normalization
           const phoneNormalized = normalizePhone(phoneInput);
           if (phoneNormalized.length < 8) {
             invalid++;
-            skipped.push({ row, reason: 'Numero di telefono non valido o troppo corto' });
+            skipped.push({ row, reason: 'Numero di telefono non valido o impossibile da normalizzare' });
             return;
           }
 
+          // Deduplication: File level
           if (seenInFile.has(phoneNormalized)) {
             dupesInFile++;
-            skipped.push({ row, reason: 'Duplicato nel file' });
+            skipped.push({ row, reason: 'Duplicato nel file CSV' });
             return;
           }
 
+          // Deduplication: Database level
           if (leads.some(l => l.phoneNormalized === phoneNormalized)) {
             alreadyExist++;
             skipped.push({ row, reason: 'Già presente nel database' });
             return;
           }
 
+          // Add to valid import list
           seenInFile.add(phoneNormalized);
           validUniques.push({
-            id: `import-${Date.now()}-${i}`,
+            id: `import-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 9)}`,
             firstName,
-            lastName,
+            lastName: lastName || '', // Optional
             phone: phoneInput,
             phoneNormalized,
-            email,
-            tags,
-            list: listName,
+            tags: [],
+            list: 'CSV Import',
             consent: 'Attivo',
-            notes,
             source: 'CSV Import',
-            createdAt: new Date().toISOString()
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            importedAt: new Date().toISOString()
           });
         });
+
+        console.log(`Import Debug - Results: ${validUniques.length} valid, ${invalid} invalid, ${dupesInFile} file dupes, ${alreadyExist} db exists`);
 
         setLeadsToImport(validUniques);
         setSkippedRows(skipped);
@@ -1421,7 +1471,7 @@ export default function App() {
                 {/* Stats Cards */}
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                   <div className="p-3 bg-gray-50 border border-border-primary rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">Totali CSV</p>
+                    <p className="text-[10px] font-bold text-text-secondary uppercase mb-1">Totale CSV</p>
                     <p className="text-xl font-black">{importStats.totalRows}</p>
                   </div>
                   <div className="p-3 bg-dr7-teal-soft border border-dr7-teal/20 rounded-lg text-center">
@@ -1429,11 +1479,11 @@ export default function App() {
                     <p className="text-xl font-black text-dr7-teal">{importStats.validUnique}</p>
                   </div>
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Duplicati CSV</p>
+                    <p className="text-[10px] font-bold text-amber-700 uppercase mb-1">Duplicati nel file</p>
                     <p className="text-xl font-black text-amber-700">{importStats.duplicatesInFile}</p>
                   </div>
                   <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-center">
-                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Già in Database</p>
+                    <p className="text-[10px] font-bold text-blue-700 uppercase mb-1">Già nel database</p>
                     <p className="text-xl font-black text-blue-700">{importStats.alreadyExisting}</p>
                   </div>
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-center">
@@ -1451,7 +1501,7 @@ export default function App() {
                         importModalTab === 'valid' ? 'text-dr7-teal border-b-2 border-dr7-teal' : 'text-text-secondary hover:text-text-primary'
                       }`}
                     >
-                      Lead da Importare ({leadsToImport.length})
+                      Lead da importare ({leadsToImport.length})
                     </button>
                     <button 
                       onClick={() => setImportModalTab('skipped')}
@@ -1459,7 +1509,7 @@ export default function App() {
                         importModalTab === 'skipped' ? 'text-dr7-teal border-b-2 border-dr7-teal' : 'text-text-secondary hover:text-text-primary'
                       }`}
                     >
-                      Righe Escluse ({skippedRows.length})
+                      Righe escluse ({skippedRows.length})
                     </button>
                   </div>
 
@@ -1469,25 +1519,22 @@ export default function App() {
                         <table className="w-full text-left text-[11px]">
                           <thead className="bg-[#FAFAFA] border-b border-border-primary sticky top-0 z-10">
                             <tr>
-                              <th className="p-3 font-bold uppercase text-text-secondary">Nome & Cognome</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">WhatsApp</th>
-                              <th className="p-3 font-bold uppercase text-text-secondary">E-mail</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">Nome</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">Cognome</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">Telefono Orig.</th>
+                              <th className="p-3 font-bold uppercase text-text-secondary">Telefono Norm.</th>
                               <th className="p-3 font-bold uppercase text-text-secondary">Segmento</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-border-primary">
                             {leadsToImport.map((l, idx) => (
                               <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                <td className="p-3 font-bold">{l.firstName} {l.lastName}</td>
+                                <td className="p-3 font-bold">{l.firstName}</td>
+                                <td className="p-3 font-bold">{l.lastName || '-'}</td>
+                                <td className="p-3 font-mono text-text-secondary">{l.phone}</td>
+                                <td className="p-3 font-mono text-dr7-teal font-bold">{l.phoneNormalized}</td>
                                 <td className="p-3">
-                                  <div className="flex flex-col">
-                                    <span className="font-mono text-black">{l.phone}</span>
-                                    <span className="text-[9px] text-text-muted font-mono">{l.phoneNormalized}</span>
-                                  </div>
-                                </td>
-                                <td className="p-3 text-text-secondary">{l.email || '-'}</td>
-                                <td className="p-3">
-                                  <span className="bg-dr7-teal-soft text-dr7-teal px-1.5 py-0.5 rounded text-[10px] font-bold uppercase">{l.list}</span>
+                                  <span className="bg-gray-100 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase text-text-secondary">{l.list}</span>
                                 </td>
                               </tr>
                             ))}
@@ -1523,11 +1570,6 @@ export default function App() {
                             ))}
                           </tbody>
                         </table>
-                        {skippedRows.length === 0 && (
-                          <div className="py-10 text-center text-text-secondary italic text-sm">
-                            Nessuna riga è stata esclusa durante l'analisi.
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
