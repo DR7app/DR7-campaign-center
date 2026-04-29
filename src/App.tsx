@@ -1728,9 +1728,21 @@ export default function App() {
 
           {activeSection === 'leads' && (
             <motion.div key="leads" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-              <div className="flex justify-between items-end">
+              <div className="flex justify-between items-end flex-wrap gap-3">
                 <h1 className="text-3xl font-bold tracking-tight">{t('leads.title')}</h1>
-                <div className="flex gap-3">
+                <div className="flex gap-3 flex-wrap">
+                  {leads.length > 0 && (
+                    <button
+                      onClick={() => {
+                        if (confirm(`Sei sicuro di voler eliminare TUTTI i ${leads.length} lead? Operazione irreversibile.`)) {
+                          setLeads([]);
+                        }
+                      }}
+                      className="bg-white border border-dr7-red/30 text-dr7-red px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-dr7-red/5 transition-all"
+                    >
+                      <Trash2 size={14} /> Elimina tutti
+                    </button>
+                  )}
                   <label className="bg-white border border-border-primary px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-gray-50 transition-all cursor-pointer">
                     <FileUp size={14} /> {t('leads.import')}
                     <input type="file" accept=".csv" className="hidden" onChange={handleImportLeads} />
@@ -1985,10 +1997,12 @@ export default function App() {
                   <p className="text-[10px] font-bold text-text-secondary uppercase tracking-[0.2em] mb-1">{t('settings.platformConfig')}</p>
                   <h1 className="text-3xl font-bold tracking-tight">{t('sidebar.settings')}</h1>
                 </div>
-                <button 
+                <button
                   onClick={() => {
-                    localStorage.clear();
-                    window.location.reload();
+                    if (confirm('Sei sicuro? Verranno eliminati TUTTI i lead, le campagne, le liste broadcast, i media e le impostazioni. Operazione irreversibile.')) {
+                      localStorage.clear();
+                      window.location.reload();
+                    }
                   }}
                   className="bg-dr7-red text-white px-4 py-2 rounded-md text-xs font-bold uppercase tracking-tight flex items-center gap-2 hover:bg-red-600 transition-all"
                 >
