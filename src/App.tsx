@@ -54,7 +54,7 @@ const findMappedColumn = (row: any, aliases: string[]): string => {
 };
 
 // --- Types ---
-type Section = 'dashboard' | 'leads' | 'lists' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai';
+type Section = 'dashboard' | 'leads' | 'broadcast' | 'campaigns' | 'calendar' | 'reports' | 'settings' | 'ai' | 'media';
 
 interface Lead {
   id: string;
@@ -115,11 +115,22 @@ interface Campaign {
   id: string;
   name: string;
   message: string;
-  recipients: string; // List ID or 'all'
+  recipientMode: 'all' | 'broadcast' | 'manual';
+  selectedBroadcastIds?: string[];
+  selectedLeadIds?: string[];
   status: 'Bozza' | 'Programmata' | 'Inviata' | 'Fallita' | 'Simulata' | 'Sospesa';
   createdAt: string;
   schedule?: CampaignSchedule;
   media?: { type: 'image' | 'video', url: string };
+}
+
+interface BroadcastList {
+  id: string;
+  name: string;
+  description?: string;
+  leadIds: string[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface MediaFile {
@@ -147,6 +158,11 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [broadcastLists, setBroadcastLists] = useState<BroadcastList[]>(() => {
+    const saved = localStorage.getItem('dr7_broadcast_lists');
+    return saved ? JSON.parse(saved) : [];
+  });
+
   const [media, setMedia] = useState<MediaFile[]>(() => {
     const saved = localStorage.getItem('dr7_media');
     return saved ? JSON.parse(saved) : [];
@@ -171,6 +187,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('dr7_campaigns', JSON.stringify(campaigns));
   }, [campaigns]);
+
+  useEffect(() => {
+    localStorage.setItem('dr7_broadcast_lists', JSON.stringify(broadcastLists));
+  }, [broadcastLists]);
 
   useEffect(() => {
     localStorage.setItem('dr7_media', JSON.stringify(media));
@@ -361,10 +381,18 @@ export default function App() {
     conditionMatchType: 'all'
   };
 
+  // --- Broadcast List State ---
+  const [isBroadcastListModalOpen, setIsBroadcastListModalOpen] = useState(false);
+  const [editingBroadcastList, setEditingBroadcastList] = useState<BroadcastList | null>(null);
+  const [isChooseBroadcastModalOpen, setIsChooseBroadcastModalOpen] = useState(false);
+  const [isSelectLeadsModalOpen, setIsSelectLeadsModalOpen] = useState(false);
+
   const [newCampaign, setNewCampaign] = useState<Partial<Campaign>>({
     name: '',
     message: '',
-    recipients: 'all',
+    recipientMode: 'all',
+    selectedBroadcastIds: [],
+    selectedLeadIds: [],
     status: 'Bozza',
     schedule: initialSchedule
   });
@@ -413,7 +441,9 @@ export default function App() {
       id: `camp-${Date.now()}`,
       name: newCampaign.name!,
       message: newCampaign.message!,
-      recipients: newCampaign.recipients!,
+      recipientMode: newCampaign.recipientMode!,
+      selectedBroadcastIds: newCampaign.selectedBroadcastIds || [],
+      selectedLeadIds: newCampaign.selectedLeadIds || [],
       status: settings.whatsappConnected ? status : 'Simulata',
       createdAt: new Date().toISOString(),
       schedule: newCampaign.schedule ? { ...newCampaign.schedule } : undefined
@@ -422,7 +452,41 @@ export default function App() {
     setCampaigns(prev => [campaign, ...prev]);
     setActiveSubTab('tutte');
     alert(settings.whatsappConnected ? "Campagna inviata/programmata!" : "Modalità Test: Campagna salvata come 'Simulata'.");
-    setNewCampaign({ name: '', message: '', recipients: 'all', status: 'Bozza', schedule: initialSchedule });
+    setNewCampaign({ 
+      name: '', 
+      message: '', 
+      recipientMode: 'all', 
+      selectedBroadcastIds: [], 
+      selectedLeadIds: [], 
+      status: 'Bozza', 
+      schedule: initialSchedule 
+    });
+  };
+
+  const handleCreateBroadcastList = (name: string, description: string, leadIds: string[]) => {
+    const list: BroadcastList = {
+      id: editingBroadcastList ? editingBroadcastList.id : `bl-${Date.now()}`,
+      name,
+      description,
+      leadIds,
+      createdAt: editingBroadcastList ? editingBroadcastList.createdAt : new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (editingBroadcastList) {
+      setBroadcastLists(prev => prev.map(l => l.id === list.id ? list : l));
+    } else {
+      setBroadcastLists(prev => [list, ...prev]);
+    }
+    
+    setIsBroadcastListModalOpen(false);
+    setEditingBroadcastList(null);
+  };
+
+  const handleDeleteBroadcastList = (id: string) => {
+    if (confirm("Sei sicuro di voler eliminare questa lista broadcast?")) {
+      setBroadcastLists(prev => prev.filter(l => l.id !== id));
+    }
   };
 
   // --- Dashboard Stats Calculation ---
@@ -469,6 +533,13 @@ export default function App() {
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
+              icon={Share2} 
+              label="Broadcast Lists" 
+              active={activeSection === 'broadcast'} 
+              onClick={() => setActiveSection('broadcast')} 
+              collapsed={!sidebarOpen}
+            />
+            <SidebarItem 
               icon={Send} 
               label="Campaign Center" 
               active={activeSection === 'campaigns'} 
@@ -478,8 +549,8 @@ export default function App() {
             <SidebarItem 
               icon={ImageIcon} 
               label="Media Library" 
-              active={activeSection === 'lists'} // Using 'lists' as a temporary key or renaming
-              onClick={() => setActiveSection('lists')} 
+              active={activeSection === 'media'} 
+              onClick={() => setActiveSection('media')} 
               collapsed={!sidebarOpen}
             />
             <SidebarItem 
@@ -571,6 +642,93 @@ export default function App() {
         {/* Dynamic Content Area */}
         <main className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-bg-page">
           <AnimatePresence mode="wait">
+          {activeSection === 'broadcast' && (
+            <motion.div key="broadcast" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+              <div className="flex justify-between items-end">
+                <div>
+                  <h1 className="text-3xl font-bold tracking-tight">Liste Broadcast</h1>
+                  <p className="text-text-secondary text-sm">Gestisci i gruppi di lead per le tue campagne</p>
+                </div>
+                <button 
+                  onClick={() => {
+                    setEditingBroadcastList(null);
+                    setIsBroadcastListModalOpen(true);
+                  }}
+                  className="btn-teal px-6 py-2.5 rounded-md font-bold text-sm flex items-center gap-2 shadow-md"
+                >
+                  <Plus size={18} /> CREA LISTA
+                </button>
+              </div>
+
+              {broadcastLists.length === 0 ? (
+                <div className="bg-white border border-border-primary rounded-xl p-12 text-center space-y-4">
+                  <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto text-text-secondary">
+                    <Share2 size={32} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg">Nessuna lista broadcast</h3>
+                    <p className="text-text-secondary text-sm max-w-xs mx-auto">Crea una lista broadcast per inviare campagne a gruppi predefiniti di lead.</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsBroadcastListModalOpen(true)}
+                    className="text-dr7-teal font-bold text-xs uppercase tracking-widest hover:underline"
+                  >
+                    Crea la tua prima lista
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {broadcastLists.map(list => (
+                    <div key={list.id} className="bg-white border border-border-primary rounded-xl p-5 shadow-sm hover:shadow-md transition-all group">
+                      <div className="flex justify-between items-start mb-4">
+                        <div className="p-2 bg-dr7-teal-soft rounded text-dr7-teal">
+                          <Share2 size={20} />
+                        </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button 
+                            onClick={() => {
+                              setEditingBroadcastList(list);
+                              setIsBroadcastListModalOpen(true);
+                            }}
+                            className="p-1.5 hover:bg-gray-100 rounded text-text-secondary transition-colors"
+                          >
+                            <Settings size={14} />
+                          </button>
+                          <button 
+                            onClick={() => handleDeleteBroadcastList(list.id)}
+                            className="p-1.5 hover:bg-red-50 rounded text-dr7-red transition-colors"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-black uppercase tracking-tight text-sm mb-1">{list.name}</h4>
+                        <p className="text-xs text-text-secondary line-clamp-1 h-4">{list.description || 'Nessuna descrizione'}</p>
+                      </div>
+                      <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center">
+                        <div className="flex items-center gap-1.5">
+                          <Users size={14} className="text-text-secondary" />
+                          <span className="text-xs font-black text-black">{list.leadIds.length} <span className="font-medium text-text-secondary">lead</span></span>
+                        </div>
+                        <span className="text-[10px] text-text-muted font-mono">{new Date(list.updatedAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {activeSection === 'media' && (
+             <motion.div key="media" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+               <h1 className="text-3xl font-bold tracking-tight">Media Library</h1>
+               <div className="bg-white border border-border-primary rounded-xl p-12 text-center">
+                  <p className="text-text-secondary italic">Sezione in fase di sviluppo...</p>
+               </div>
+             </motion.div>
+          )}
+
           {activeSection === 'campaigns' && activeSubTab === 'nuova' && (
             <motion.div key="nuova-campagna" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
               <div className="flex justify-between items-end">
@@ -625,10 +783,110 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-2">Destinatari</label>
-                      <div className="grid grid-cols-2 gap-3">
-                        <RecipientOption label="Tutti i Lead" count={leads.length} checked={newCampaign.recipients === 'all'} onChange={() => setNewCampaign(prev => ({ ...prev, recipients: 'all' }))} />
-                        <RecipientOption label="Test Group" count={0} checked={newCampaign.recipients === 'test'} onChange={() => setNewCampaign(prev => ({ ...prev, recipients: 'test' }))} />
+                      <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest mb-3">Destinatari</label>
+                      <div className="flex bg-gray-100 p-1 rounded-lg border border-border-primary mb-4">
+                        <button 
+                          onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'all', selectedBroadcastIds: [], selectedLeadIds: [] }))}
+                          className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'all' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
+                        >
+                          All Leads
+                        </button>
+                        <button 
+                          onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'broadcast' }))}
+                          className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'broadcast' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
+                        >
+                          Broadcast
+                        </button>
+                        <button 
+                          onClick={() => setNewCampaign(prev => ({ ...prev, recipientMode: 'manual' }))}
+                          className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-md transition-all ${newCampaign.recipientMode === 'manual' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary hover:text-text-primary'}`}
+                        >
+                          Select
+                        </button>
+                      </div>
+
+                      <div className="bg-gray-50 border border-border-primary rounded-lg p-4">
+                        {newCampaign.recipientMode === 'all' && (
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <p className="text-xs font-bold text-black uppercase tracking-tight">Tutti i Lead</p>
+                              <p className="text-[10px] text-text-secondary uppercase">Invierai a tutti i contatti nel database</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xl font-black text-dr7-teal">{leads.length}</p>
+                              <p className="text-[9px] text-text-secondary font-bold uppercase">Recipients</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {newCampaign.recipientMode === 'broadcast' && (
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <p className="text-xs font-bold text-black uppercase tracking-tight">Liste Broadcast</p>
+                                <p className="text-[10px] text-text-secondary uppercase">Seleziona una o più liste salvate</p>
+                              </div>
+                              <button 
+                                onClick={() => setIsChooseBroadcastModalOpen(true)}
+                                className="px-3 py-1.5 bg-white border border-border-primary rounded text-[10px] font-bold text-dr7-teal hover:border-dr7-teal transition-all uppercase"
+                              >
+                                {newCampaign.selectedBroadcastIds && newCampaign.selectedBroadcastIds.length > 0 ? 'Modifica Selezione' : 'Scegli Liste'}
+                              </button>
+                            </div>
+                            
+                            {newCampaign.selectedBroadcastIds && newCampaign.selectedBroadcastIds.length > 0 && (
+                              <div className="space-y-2 pt-2 border-t border-gray-200">
+                                <div className="flex flex-wrap gap-1.5">
+                                  {broadcastLists.filter(bl => newCampaign.selectedBroadcastIds?.includes(bl.id)).map(bl => (
+                                    <span key={bl.id} className="bg-white border border-border-primary px-2 py-1 rounded text-[9px] font-bold text-text-secondary uppercase flex items-center gap-1">
+                                      {bl.name}
+                                      <button onClick={() => setNewCampaign(prev => ({ ...prev, selectedBroadcastIds: prev.selectedBroadcastIds?.filter(id => id !== bl.id) }))}>
+                                        <X size={10} className="text-dr7-red" />
+                                      </button>
+                                    </span>
+                                  ))}
+                                </div>
+                                <div className="flex justify-between items-center bg-dr7-teal-soft/30 p-2 rounded">
+                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">Totale Unici:</span>
+                                  <span className="text-sm font-black text-dr7-teal">
+                                    {(() => {
+                                      const selectedLists = broadcastLists.filter(bl => newCampaign.selectedBroadcastIds?.includes(bl.id));
+                                      const allIds = selectedLists.flatMap(bl => bl.leadIds);
+                                      const uniqueIds = new Set(allIds);
+                                      return uniqueIds.size;
+                                    })()}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {newCampaign.recipientMode === 'manual' && (
+                          <div className="space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <p className="text-xs font-bold text-black uppercase tracking-tight">Selezione Manuale</p>
+                                <p className="text-[10px] text-text-secondary uppercase">Scegli i lead singolarmente</p>
+                              </div>
+                              <button 
+                                onClick={() => setIsSelectLeadsModalOpen(true)}
+                                className="px-3 py-1.5 bg-white border border-border-primary rounded text-[10px] font-bold text-dr7-teal hover:border-dr7-teal transition-all uppercase"
+                              >
+                                {newCampaign.selectedLeadIds && newCampaign.selectedLeadIds.length > 0 ? 'Modifica Selezione' : 'Seleziona Lead'}
+                              </button>
+                            </div>
+
+                            {newCampaign.selectedLeadIds && newCampaign.selectedLeadIds.length > 0 && (
+                              <div className="pt-2 border-t border-gray-200">
+                                <div className="flex justify-between items-center bg-dr7-teal-soft/30 p-2 rounded">
+                                  <span className="text-[10px] font-bold text-dr7-teal uppercase">Lead Selezionati:</span>
+                                  <span className="text-sm font-black text-dr7-teal">{newCampaign.selectedLeadIds.length}</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -961,10 +1219,17 @@ export default function App() {
                          <CampaignTableRow 
                             key={campaign.id} 
                             name={campaign.name} 
-                            list={campaign.recipients} 
+                            recipientMode={campaign.recipientMode} 
                             status={campaign.status} 
                             date={new Date(campaign.createdAt).toLocaleDateString()} 
-                            recipients={campaign.recipients === 'all' ? leads.length : 0} 
+                            uniqueCount={(() => {
+                              if (campaign.recipientMode === 'all') return leads.length;
+                              if (campaign.recipientMode === 'broadcast') {
+                                const selected = broadcastLists.filter(bl => campaign.selectedBroadcastIds?.includes(bl.id));
+                                return new Set(selected.flatMap(bl => bl.leadIds)).size;
+                              }
+                              return campaign.selectedLeadIds?.length || 0;
+                            })()} 
                             onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
                             schedule={campaign.schedule}
                             getSummary={getScheduleSummary}
@@ -1034,7 +1299,13 @@ export default function App() {
                         </thead>
                         <tbody className="divide-y divide-border-primary italic">
                           {campaigns.slice(0, 5).map(c => (
-                            <RecentScanRow key={c.id} name={c.name} date={new Date(c.createdAt).toLocaleDateString()} target={c.recipients} status={c.status} />
+                            <RecentScanRow 
+                              key={c.id} 
+                              name={c.name} 
+                              date={new Date(c.createdAt).toLocaleDateString()} 
+                              targetLabel={c.recipientMode === 'all' ? 'Tutti i lead' : c.recipientMode === 'broadcast' ? 'Broadcast' : 'Manuale'} 
+                              status={c.status} 
+                            />
                           ))}
                         </tbody>
                       </table>
@@ -1602,6 +1873,49 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        {isBroadcastListModalOpen && (
+          <BroadcastListModal 
+            onClose={() => {
+              setIsBroadcastListModalOpen(false);
+              setEditingBroadcastList(null);
+            }}
+            onSave={handleCreateBroadcastList}
+            leads={leads}
+            initialData={editingBroadcastList}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isChooseBroadcastModalOpen && (
+          <ChooseBroadcastModal 
+            onClose={() => setIsChooseBroadcastModalOpen(false)}
+            broadcastLists={broadcastLists}
+            selectedIds={newCampaign.selectedBroadcastIds || []}
+            onConfirm={(ids) => setNewCampaign(prev => ({ ...prev, selectedBroadcastIds: ids }))}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isSelectLeadsModalOpen && (
+          <SelectLeadsModal 
+            onClose={() => setIsSelectLeadsModalOpen(false)}
+            leads={leads}
+            selectedIds={newCampaign.selectedLeadIds || []}
+            onConfirm={(ids: string[]) => setNewCampaign(prev => ({ ...prev, selectedLeadIds: ids }))}
+            onSaveAsBroadcast={(ids: string[]) => {
+              const name = prompt("Nome della Lista Broadcast:");
+              if (name) {
+                handleCreateBroadcastList(name, "Lista creata da selezione manuale", ids);
+                setNewCampaign(prev => ({ ...prev, recipientMode: 'broadcast', selectedBroadcastIds: [broadcastLists[0]?.id || `bl-${Date.now()}`], selectedLeadIds: [] }));
+              }
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {isLeadModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div 
@@ -1693,6 +2007,222 @@ export default function App() {
   );
 }
 
+// --- Modals for Recipients & Broadcast Lists ---
+
+function BroadcastListModal({ onClose, onSave, leads, initialData }: any) {
+  const [name, setName] = useState(initialData?.name || '');
+  const [description, setDescription] = useState(initialData?.description || '');
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>(initialData?.leadIds || []);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredLeads = leads.filter((l: Lead) => 
+    `${l.firstName} ${l.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    l.phoneNormalized.includes(searchTerm)
+  );
+
+  const toggleLead = (id: string) => {
+    setSelectedLeadIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
+          <h3 className="font-bold text-lg uppercase tracking-tight">{initialData ? 'Modifica Lista' : 'Nuova Lista Broadcast'}</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+        </div>
+
+        <div className="p-6 overflow-y-auto custom-scrollbar space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Nome Lista *</label>
+              <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Es. Clienti Supercar" className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm outline-none focus:border-dr7-teal" />
+            </div>
+            <div className="space-y-1">
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Descrizione</label>
+              <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="Es. Clienti che hanno noleggiato Ferrari" className="w-full bg-white border border-border-primary rounded-md px-4 py-2.5 text-sm outline-none focus:border-dr7-teal" />
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex justify-between items-end">
+              <label className="block text-[10px] font-bold text-text-secondary uppercase tracking-widest">Seleziona Lead ({selectedLeadIds.length})</label>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
+                <input type="text" placeholder="Cerca lead..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-1.5 bg-gray-100 border border-border-primary rounded-md text-xs w-48 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
+              </div>
+            </div>
+
+            <div className="border border-border-primary rounded-lg overflow-hidden">
+              <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-gray-50 border-b border-border-primary sticky top-0">
+                    <tr>
+                      <th className="p-2 w-10 text-center"><input type="checkbox" checked={filteredLeads.length > 0 && filteredLeads.every((l: Lead) => selectedLeadIds.includes(l.id))} onChange={(e) => {
+                        if (e.target.checked) setSelectedLeadIds(prev => [...new Set([...prev, ...filteredLeads.map((l: Lead) => l.id)])]);
+                        else setSelectedLeadIds(prev => prev.filter(id => !filteredLeads.map((l: Lead) => l.id).includes(id)));
+                      }} /></th>
+                      <th className="p-2 font-bold uppercase text-text-secondary">Nome & Cognome</th>
+                      <th className="p-2 font-bold uppercase text-text-secondary">WhatsApp</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-primary">
+                    {filteredLeads.map((l: Lead) => (
+                      <tr key={l.id} className={`hover:bg-gray-50 transition-colors ${selectedLeadIds.includes(l.id) ? 'bg-dr7-teal-soft/20' : ''}`} onClick={() => toggleLead(l.id)}>
+                        <td className="p-2 w-10 text-center"><input type="checkbox" checked={selectedLeadIds.includes(l.id)} readOnly className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" /></td>
+                        <td className="p-2 font-bold">{l.firstName} {l.lastName}</td>
+                        <td className="p-2 font-mono text-text-secondary">{l.phone}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 bg-gray-50 border-t border-border-primary flex gap-3 shrink-0">
+          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">Annulla</button>
+          <button onClick={() => name && onSave(name, description, selectedLeadIds)} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md disabled:opacity-50" disabled={!name}>Salva Lista</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function ChooseBroadcastModal({ onClose, broadcastLists, selectedIds, onConfirm }: any) {
+  const [currentSelection, setCurrentSelection] = useState<string[]>(selectedIds);
+
+  const toggleList = (id: string) => {
+    setCurrentSelection(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
+          <h3 className="font-bold text-lg uppercase tracking-tight">Scegli Liste Broadcast</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+        </div>
+
+        <div className="p-4 overflow-y-auto custom-scrollbar flex-1">
+          {broadcastLists.length === 0 ? (
+            <div className="py-12 text-center space-y-4">
+              <Share2 size={32} className="mx-auto text-text-muted" />
+              <p className="text-sm text-text-secondary">Nessuna lista broadcast disponibile.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {broadcastLists.map((list: BroadcastList) => (
+                <div key={list.id} className={`p-4 border rounded-lg cursor-pointer transition-all ${currentSelection.includes(list.id) ? 'border-dr7-teal bg-dr7-teal-soft/20 shadow-sm' : 'border-border-primary hover:border-dr7-teal/50'}`} onClick={() => toggleList(list.id)}>
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded border flex items-center justify-center ${currentSelection.includes(list.id) ? 'bg-dr7-teal border-dr7-teal text-white' : 'bg-white border-gray-300'}`}>
+                        {currentSelection.includes(list.id) && <CheckCircle2 size={12} />}
+                      </div>
+                      <div>
+                        <p className="font-bold text-sm uppercase tracking-tight">{list.name}</p>
+                        <p className="text-[10px] text-text-secondary">{list.leadIds.length} lead</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-text-muted font-mono">{new Date(list.updatedAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 bg-gray-50 border-t border-border-primary flex gap-3 shrink-0">
+          <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100">Annulla</button>
+          <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md">Conferma Selezione</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function SelectLeadsModal({ onClose, leads, selectedIds, onConfirm, onSaveAsBroadcast }: any) {
+  const [currentSelection, setCurrentSelection] = useState<string[]>(selectedIds);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filteredLeads = leads.filter((l: Lead) => 
+    `${l.firstName} ${l.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    l.phoneNormalized.includes(searchTerm)
+  );
+
+  const toggleLead = (id: string) => {
+    setCurrentSelection(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-2xl bg-white rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-border-primary flex justify-between items-center bg-gray-50 shrink-0">
+          <h3 className="font-bold text-lg uppercase tracking-tight">Seleziona Lead Manualmente</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors"><X size={20} /></button>
+        </div>
+
+        <div className="p-4 bg-white border-b border-border-primary flex justify-between items-center shrink-0">
+          <div className="flex items-center gap-4">
+            <span className="text-[10px] font-bold text-dr7-teal uppercase tracking-widest bg-dr7-teal-soft/30 px-3 py-1.5 rounded-full">Selezionati: {currentSelection.length}</span>
+            <button onClick={() => setCurrentSelection([])} className="text-[10px] font-bold text-text-secondary uppercase hover:text-dr7-red underline">Pulisci Tutto</button>
+          </div>
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-secondary" />
+            <input type="text" placeholder="Cerca per nome o telefono..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 pr-4 py-2 bg-gray-100 border border-border-primary rounded-md text-xs w-64 focus:bg-white focus:border-dr7-teal outline-none transition-all" />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-gray-50 border-b border-border-primary sticky top-0 z-10">
+              <tr>
+                <th className="p-3 w-12 text-center">
+                  <input type="checkbox" checked={filteredLeads.length > 0 && filteredLeads.every((l: Lead) => currentSelection.includes(l.id))} onChange={(e) => {
+                    if (e.target.checked) setCurrentSelection(prev => [...new Set([...prev, ...filteredLeads.map((l: Lead) => l.id)])]);
+                    else setCurrentSelection(prev => prev.filter(id => !filteredLeads.map((l: Lead) => l.id).includes(id)));
+                  }} className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" />
+                </th>
+                <th className="p-3 font-bold uppercase text-text-secondary">Nome & Cognome</th>
+                <th className="p-3 font-bold uppercase text-text-secondary">WhatsApp</th>
+                <th className="p-3 font-bold uppercase text-text-secondary text-right">Segmento</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border-primary">
+              {filteredLeads.map((l: Lead) => (
+                <tr key={l.id} className={`hover:bg-gray-50 transition-colors cursor-pointer ${currentSelection.includes(l.id) ? 'bg-dr7-teal-soft/20' : ''}`} onClick={() => toggleLead(l.id)}>
+                  <td className="p-3 w-12 text-center"><input type="checkbox" checked={currentSelection.includes(l.id)} readOnly className="rounded border-gray-300 text-dr7-teal focus:ring-dr7-teal" /></td>
+                  <td className="p-3 font-bold">{l.firstName} {l.lastName}</td>
+                  <td className="p-3 font-mono text-text-secondary">{l.phone}</td>
+                  <td className="p-3 text-right"><span className="px-2 py-0.5 bg-gray-100 border border-border-primary rounded text-[9px] font-bold text-text-secondary uppercase">{l.list}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredLeads.length === 0 && (
+            <div className="py-20 text-center space-y-4">
+              <Users size={32} className="mx-auto text-text-muted opacity-30" />
+              <p className="text-sm text-text-secondary italic">Nessun lead trovato con i criteri di ricerca.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="p-6 bg-gray-50 border-t border-border-primary flex flex-col md:flex-row gap-3 shrink-0">
+          <button onClick={() => { onSaveAsBroadcast(currentSelection); onClose(); }} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:text-dr7-teal transition-all shadow-sm" disabled={currentSelection.length === 0}>Salva come Lista Broadcast</button>
+          <div className="flex gap-3 flex-1">
+            <button onClick={onClose} className="flex-1 bg-white border border-border-primary px-4 py-2.5 rounded-md text-xs font-bold uppercase hover:bg-gray-100 shadow-sm">Annulla</button>
+            <button onClick={() => { onConfirm(currentSelection); onClose(); }} className="flex-1 btn-teal px-4 py-2.5 rounded-md text-xs font-bold uppercase shadow-md" disabled={currentSelection.length === 0}>Conferma ({currentSelection.length})</button>
+          </div>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 // --- DR7 Sidebar Component ---
 
 function SidebarItem({ icon: Icon, label, active, onClick, collapsed, isPremium }: any) {
@@ -1774,12 +2304,12 @@ function StatCard({ label, value, subValue, icon: Icon }: any) {
   );
 }
 
-function RecentScanRow({ name, date, target, status }: any) {
+function RecentScanRow({ name, date, targetLabel, status }: any) {
   return (
     <tr className="hover:bg-gray-50 transition-all font-medium">
       <td className="p-3 font-bold text-black">{name}</td>
       <td className="p-3 text-text-secondary">{date}</td>
-      <td className="p-3 text-text-secondary">{target}</td>
+      <td className="p-3 text-text-secondary italic">{targetLabel}</td>
       <td className="p-3 text-right"><span className="px-2 py-0.5 bg-dr7-green text-white text-[9px] font-bold rounded uppercase">{status}</span></td>
     </tr>
   );
@@ -1806,14 +2336,16 @@ function LeadTableRow({ name, phone, lists, status, date, source, onDelete }: an
   );
 }
 
-function CampaignTableRow({ name, list, status, date, recipients, onDelete, schedule, getSummary }: any) {
+function CampaignTableRow({ name, recipientMode, status, date, uniqueCount, onDelete, schedule, getSummary }: any) {
   return (
     <tr className="hover:bg-[#FAFAFA] transition-colors group border-b border-border-primary last:border-0">
       <td className="p-4 align-top">
         <div className="space-y-1">
           <p className="font-bold text-black text-sm">{name}</p>
           <div className="flex gap-2">
-            <span className="text-[9px] font-bold text-text-secondary bg-gray-100 px-1.5 py-0.5 rounded uppercase tracking-tighter">Lista: {list}</span>
+            <span className="text-[9px] font-bold text-text-secondary bg-gray-100 px-1.5 py-0.5 rounded uppercase tracking-tighter">
+              Target: {recipientMode === 'all' ? 'Tutti i lead' : recipientMode === 'broadcast' ? 'Broadcast' : 'Manuale'}
+            </span>
             <span className="text-[9px] font-bold text-text-muted italic">Creato: {date}</span>
           </div>
           {schedule && (
@@ -1829,7 +2361,7 @@ function CampaignTableRow({ name, list, status, date, recipients, onDelete, sche
       <td className="p-4 text-text-secondary text-xs align-top font-mono">
          {schedule?.type === 'single' ? schedule.singleDate : `Ogni ${schedule?.recurrenceUnit === 'day' ? 'giorno' : schedule?.recurrenceUnit === 'week' ? 'settimana' : 'mese'}`}
       </td>
-      <td className="p-4 text-xs font-semibold align-top">{recipients > 0 ? recipients.toLocaleString() : 'N/A'}</td>
+      <td className="p-4 text-xs font-semibold align-top">{uniqueCount > 0 ? uniqueCount.toLocaleString() : '0'}</td>
       <td className="p-4 align-top">
          <span className="flex items-center gap-2 text-xs font-medium text-text-secondary">
            <ImageIcon size={14} className="text-dr7-teal" /> Media
