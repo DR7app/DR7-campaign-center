@@ -2054,23 +2054,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-4">
-                    <h3 className="font-bold text-sm uppercase tracking-tight">{t('settings.systemPolicy')}</h3>
-                    <div className="space-y-3">
-                       <label className="flex items-center gap-3 cursor-pointer group">
-                          <input 
-                            type="checkbox" 
-                            className="w-4 h-4 rounded text-dr7-teal focus:ring-dr7-teal" 
-                            checked={settings.testMode}
-                            onChange={() => setSettings((prev: any) => ({ ...prev, testMode: !prev.testMode }))}
-                          />
-                          <span className="text-xs font-bold text-text-secondary group-hover:text-black transition-colors">{t('dashboard.testMode')}</span>
-                       </label>
-                       <p className="text-[10px] text-text-muted italic pl-7">
-                          {t('settings.testModeDesc')}
-                       </p>
-                    </div>
-                  </div>
                 </div>
               </div>
             </motion.div>
@@ -2318,13 +2301,13 @@ export default function App() {
           return (
             <CampaignSenderModal
               campaign={c}
-              mode={settings.whatsappMode === 'green-api' ? 'green-api' : 'link'}
-              apiCreds={settings.whatsappMode === 'green-api' ? {
+              apiCreds={settings.greenApiInstanceId && settings.greenApiTokenInstance ? {
                 instanceId: settings.greenApiInstanceId,
                 apiTokenInstance: settings.greenApiTokenInstance,
                 apiHost: settings.greenApiHost,
               } : undefined}
               onClose={() => setSenderModalCampaignId(null)}
+              onOpenSettings={() => { setSenderModalCampaignId(null); setActiveSection('settings'); }}
               onMarkAllSent={(id) => {
                 setCampaigns(prev => prev.map(x => x.id === id ? { ...x, status: 'Inviata' as const } : x));
               }}
