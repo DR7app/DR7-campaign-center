@@ -23,14 +23,43 @@ interface Lead {
   createdAt: string;
 }
 
+interface TimeWindow {
+  start: string;
+  end: string;
+}
+
+interface AutomationCondition {
+  id: string;
+  type: 'Revenue' | 'Vehicle availability' | 'Lead count' | 'Custom';
+  operator: 'reaches' | 'greater than' | 'lower than' | 'is free for more than' | 'equals';
+  value: string;
+  period?: string;
+}
+
+interface CampaignSchedule {
+  type: 'single' | 'recurring';
+  isActive: boolean;
+  singleDate?: string;
+  singleTime?: string;
+  recurrenceCount: number;
+  recurrenceUnit: 'day' | 'week' | 'month';
+  dailyTimes: string[];
+  weeklySlots: { day: string, time: string }[];
+  monthlySlots: { day: number, time: string }[];
+  allowedWindows: TimeWindow[];
+  blockedWindows: TimeWindow[];
+  conditions: AutomationCondition[];
+  conditionMatchType: 'all' | 'any';
+}
+
 interface Campaign {
   id: string;
   name: string;
   message: string;
   recipients: string; // List ID or 'all'
-  status: 'Bozza' | 'Programmata' | 'Inviata' | 'Fallita' | 'Simulata';
+  status: 'Bozza' | 'Programmata' | 'Inviata' | 'Fallita' | 'Simulata' | 'Sospesa';
   createdAt: string;
-  scheduledAt?: string;
+  schedule?: CampaignSchedule;
   media?: { type: 'image' | 'video', url: string };
 }
 
@@ -163,16 +192,66 @@ export default function App() {
   };
 
   // --- Campaign Form State ---
+  const initialSchedule: CampaignSchedule = {
+    type: 'single',
+    isActive: true,
+    recurrenceCount: 1,
+    recurrenceUnit: 'day',
+    dailyTimes: ['09:00'],
+    weeklySlots: [],
+    monthlySlots: [],
+    allowedWindows: [{ start: '07:00', end: '22:00' }],
+    blockedWindows: [],
+    conditions: [],
+    conditionMatchType: 'all'
+  };
+
   const [newCampaign, setNewCampaign] = useState<Partial<Campaign>>({
     name: '',
     message: '',
     recipients: 'all',
-    status: 'Bozza'
+    status: 'Bozza',
+    schedule: initialSchedule
   });
+
+  const getScheduleSummary = (sched: CampaignSchedule | undefined) => {
+    if (!sched) return "Nessuna pianificazione impostata.";
+    const { type, recurrenceCount, recurrenceUnit, dailyTimes, weeklySlots, monthlySlots, singleDate, singleTime, conditions, isActive } = sched;
+    
+    let text = isActive ? "✓ Campagna Attiva. " : "⚠ Campagna Sospesa. ";
+
+    if (type === 'single') {
+      text += `Invio singolo previsto il ${singleDate || '--/--/--'} alle ${singleTime || '--:--'}.`;
+    } else {
+      text += `Invio ricorrente (${recurrenceCount} volte al ${recurrenceUnit === 'day' ? 'giorno' : recurrenceUnit === 'week' ? 'settimana' : 'mese'}). `;
+      if (recurrenceUnit === 'day') text += `Orari: ${dailyTimes.join(', ')}.`;
+      if (recurrenceUnit === 'week') text += `Giorni: ${weeklySlots.map(s => `${s.day} ${s.time}`).join(', ')}.`;
+      if (recurrenceUnit === 'month') text += `Giorni del mese: ${monthlySlots.map(s => `Giorno ${s.day} ore ${s.time}`).join(', ')}.`;
+    }
+
+    if (conditions.length > 0) {
+      text += ` Attivazione condizionale impostata su ${conditions.length} regole.`;
+    }
+
+    return text;
+  };
 
   const handleSendCampaign = (status: Campaign['status']) => {
     if (!newCampaign.name || !newCampaign.message) {
       return alert("Completa il nome e il messaggio della campagna.");
+    }
+
+    // Validation for schedules
+    if (status === 'Programmata' && newCampaign.schedule) {
+      const s = newCampaign.schedule;
+      if (s.type === 'single' && (!s.singleDate || !s.singleTime)) {
+        return alert("Inserisci data e ora per l'invio singolo.");
+      }
+      if (s.type === 'recurring') {
+        if (s.recurrenceUnit === 'day' && s.dailyTimes.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} orari per l'invio giornaliero.`);
+        if (s.recurrenceUnit === 'week' && s.weeklySlots.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} slot settimanali.`);
+        if (s.recurrenceUnit === 'month' && s.monthlySlots.length < s.recurrenceCount) return alert(`Definisci tutti i ${s.recurrenceCount} slot mensili.`);
+      }
     }
 
     const campaign: Campaign = {
@@ -181,12 +260,14 @@ export default function App() {
       message: newCampaign.message!,
       recipients: newCampaign.recipients!,
       status: settings.whatsappConnected ? status : 'Simulata',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      schedule: newCampaign.schedule ? { ...newCampaign.schedule } : undefined
     };
 
     setCampaigns(prev => [campaign, ...prev]);
     setActiveSubTab('tutte');
     alert(settings.whatsappConnected ? "Campagna inviata/programmata!" : "Modalità Test: Campagna salvata come 'Simulata'.");
+    setNewCampaign({ name: '', message: '', recipients: 'all', status: 'Bozza', schedule: initialSchedule });
   };
 
   // --- Dashboard Stats Calculation ---
@@ -397,19 +478,238 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6">
-                    <h3 className="font-bold text-sm uppercase tracking-tight mb-4">Programmazione Invio</h3>
-                    <div className="flex gap-6">
-                      <div className="flex-1">
-                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Data e Ora</label>
-                        <div className="flex gap-2">
-                          <input type="date" className="flex-1 bg-white border border-border-primary rounded px-3 py-2 text-sm" />
-                          <input type="time" className="flex-1 bg-white border border-border-primary rounded px-3 py-2 text-sm" />
+                  <div className="bg-white border border-border-primary rounded-lg shadow-sm p-6 space-y-6">
+                    <div className="flex justify-between items-center bg-gray-50 -m-6 mb-6 p-6 border-b border-border-primary">
+                       <h3 className="font-bold text-sm uppercase tracking-tight flex items-center gap-2">
+                          <Calendar size={16} className="text-dr7-teal" /> Scheduling & Automation
+                       </h3>
+                       <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-text-secondary uppercase">Stato:</span>
+                          <button 
+                            onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, isActive: !prev.schedule!.isActive } }))}
+                            className={`px-3 py-1 rounded text-[9px] font-black uppercase transition-all ${newCampaign.schedule?.isActive ? 'bg-dr7-green text-white' : 'bg-dr7-red text-white'}`}
+                          >
+                             {newCampaign.schedule?.isActive ? 'On' : 'Off'}
+                          </button>
+                       </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      {/* Type Selector */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-text-secondary uppercase mb-3 tracking-widest">Tipo Pianificazione</label>
+                        <div className="flex bg-gray-100 p-1 rounded-md border border-border-primary">
+                          <button 
+                            onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, type: 'single' } }))}
+                            className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded transition-all ${newCampaign.schedule?.type === 'single' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary'}`}
+                          >
+                            Invio Singolo
+                          </button>
+                          <button 
+                            onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, type: 'recurring' } }))}
+                            className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded transition-all ${newCampaign.schedule?.type === 'recurring' ? 'bg-white shadow-sm text-dr7-teal' : 'text-text-secondary'}`}
+                          >
+                            Invio Ricorrente
+                          </button>
                         </div>
                       </div>
-                      <div className="flex-1 flex flex-col justify-end">
-                        <button onClick={() => handleSendCampaign('Programmata')} className="w-full bg-[#16A34A] hover:bg-dr7-green text-white font-bold text-sm py-2 px-4 rounded-md transition-all shadow-sm">
-                          CONFERMA E PROGRAMMA
+
+                      {newCampaign.schedule?.type === 'single' ? (
+                        <div className="grid grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-1">
+                          <div>
+                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Data</label>
+                            <input 
+                              type="date" 
+                              className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal outline-none" 
+                              value={newCampaign.schedule.singleDate || ''}
+                              onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, singleDate: e.target.value } }))}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Ora</label>
+                            <input 
+                              type="time" 
+                              className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm focus:border-dr7-teal outline-none" 
+                              value={newCampaign.schedule.singleTime || ''}
+                              onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, singleTime: e.target.value } }))}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4 animate-in fade-in slide-in-from-top-1">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Quante volte?</label>
+                               <select 
+                                 className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm"
+                                 value={newCampaign.schedule?.recurrenceCount}
+                                 onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, recurrenceCount: parseInt(e.target.value) } }))}
+                               >
+                                  {[1, 2, 3, 5].map(v => <option key={v} value={v}>{v} {v === 1 ? 'volta' : 'volte'}</option>)}
+                               </select>
+                            </div>
+                            <div>
+                               <label className="block text-[10px] font-bold text-text-secondary uppercase mb-2">Cadenza</label>
+                               <select 
+                                 className="w-full bg-white border border-border-primary rounded px-3 py-2 text-sm"
+                                 value={newCampaign.schedule?.recurrenceUnit}
+                                 onChange={e => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, recurrenceUnit: e.target.value as any } }))}
+                               >
+                                  <option value="day">Al giorno</option>
+                                  <option value="week">A settimana</option>
+                                  <option value="month">Al mese</option>
+                               </select>
+                            </div>
+                          </div>
+
+                          {/* Dynamic Slots based on count & unit */}
+                          <div className="space-y-3 pt-2 border-t border-gray-100">
+                             <p className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Configura Slot di Invio</p>
+                             {Array.from({ length: newCampaign.schedule?.recurrenceCount || 0 }).map((_, i) => (
+                                <div key={i} className="flex gap-2 items-center">
+                                   <span className="text-[10px] font-bold text-text-muted w-14">Slot #{i+1}</span>
+                                   {newCampaign.schedule?.recurrenceUnit === 'week' && (
+                                     <select 
+                                       className="flex-1 bg-white border border-border-primary rounded px-2 py-1.5 text-xs"
+                                       value={newCampaign.schedule.weeklySlots[i]?.day || ''}
+                                       onChange={e => {
+                                         const newSlots = [...newCampaign.schedule!.weeklySlots];
+                                         newSlots[i] = { day: e.target.value, time: newSlots[i]?.time || '09:00' };
+                                         setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, weeklySlots: newSlots } }));
+                                       }}
+                                     >
+                                        <option value="">Seleziona Giorno</option>
+                                        {['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map(d => <option key={d} value={d}>{d}</option>)}
+                                     </select>
+                                   )}
+                                   {newCampaign.schedule?.recurrenceUnit === 'month' && (
+                                     <input 
+                                       type="number" min="1" max="31" placeholder="Giorno (1-31)"
+                                       className="flex-1 bg-white border border-border-primary rounded px-2 py-1.5 text-xs"
+                                       value={newCampaign.schedule.monthlySlots[i]?.day || ''}
+                                       onChange={e => {
+                                          const newSlots = [...newCampaign.schedule!.monthlySlots];
+                                          newSlots[i] = { day: parseInt(e.target.value), time: newSlots[i]?.time || '09:00' };
+                                          setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, monthlySlots: newSlots } }));
+                                       }}
+                                     />
+                                   )}
+                                   <input 
+                                     type="time" 
+                                     className="flex-1 bg-white border border-border-primary rounded px-2 py-1.5 text-xs"
+                                     value={(newCampaign.schedule?.recurrenceUnit === 'day' ? (newCampaign.schedule.dailyTimes[i] || '') : newCampaign.schedule?.recurrenceUnit === 'week' ? (newCampaign.schedule.weeklySlots[i]?.time || '') : (newCampaign.schedule?.monthlySlots[i]?.time || '')) || ''}
+                                     onChange={e => {
+                                        const s = newCampaign.schedule!;
+                                        if (s.recurrenceUnit === 'day') {
+                                           const newTimes = [...s.dailyTimes]; newTimes[i] = e.target.value;
+                                           setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, dailyTimes: newTimes } }));
+                                        } else if (s.recurrenceUnit === 'week') {
+                                           const newSlots = [...s.weeklySlots]; newSlots[i] = { day: newSlots[i]?.day || '', time: e.target.value };
+                                           setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, weeklySlots: newSlots } }));
+                                        } else {
+                                           const newSlots = [...s.monthlySlots]; newSlots[i] = { day: newSlots[i]?.day || 1, time: e.target.value };
+                                           setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, monthlySlots: newSlots } }));
+                                        }
+                                     }}
+                                   />
+                                </div>
+                             ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Sending Limits / Windows */}
+                      <div className="pt-4 border-t border-gray-100 space-y-4">
+                        <div className="flex justify-between items-center">
+                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Finestre di Invio</label>
+                           <button 
+                            onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: [...prev.schedule!.allowedWindows, { start: '09:00', end: '18:00' }] } }))}
+                            className="text-[9px] font-black text-dr7-teal border border-dr7-teal/20 px-2 py-1 rounded"
+                           >+ AGGIUNGI LIMITE</button>
+                        </div>
+                        <div className="space-y-2">
+                           {newCampaign.schedule?.allowedWindows.map((win, idx) => (
+                             <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded border border-border-primary">
+                               <span className="text-[9px] font-bold text-text-muted uppercase">Consentito:</span>
+                               <input type="time" className="bg-transparent border-none p-0 text-xs w-16" value={win.start} onChange={e => {
+                                  const nw = [...newCampaign.schedule!.allowedWindows]; nw[idx].start = e.target.value;
+                                  setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: nw } }));
+                               }} />
+                               <span className="text-[9px]">-</span>
+                               <input type="time" className="bg-transparent border-none p-0 text-xs w-16" value={win.end} onChange={e => {
+                                  const nw = [...newCampaign.schedule!.allowedWindows]; nw[idx].end = e.target.value;
+                                  setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: nw } }));
+                               }} />
+                               <button onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, allowedWindows: prev.schedule!.allowedWindows.filter((_, i) => i !== idx) } }))}>
+                                 <X size={12} className="text-dr7-red" />
+                               </button>
+                             </div>
+                           ))}
+                        </div>
+                      </div>
+
+                      {/* Condition Builder */}
+                      <div className="pt-4 border-t border-gray-100 space-y-4">
+                        <div className="flex justify-between items-center">
+                           <label className="text-[10px] font-bold text-text-secondary uppercase tracking-widest">Trigger Automatizzati (Conditional)</label>
+                           <button 
+                            onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: [...prev.schedule!.conditions, { id: Date.now().toString(), type: 'Revenue', operator: 'reaches', value: '' }] } }))}
+                            className="text-[9px] font-black text-dr7-teal border border-dr7-teal/20 px-2 py-1 rounded"
+                           >+ AGGIUNGI REGOLA</button>
+                        </div>
+                        <div className="space-y-2">
+                           {newCampaign.schedule?.conditions.map((cond, idx) => (
+                             <div key={cond.id} className="p-3 bg-gray-50 border border-border-primary rounded-lg space-y-3">
+                                <div className="flex justify-between items-center">
+                                   <span className="text-[9px] font-bold text-dr7-teal uppercase">Regola #{idx+1}</span>
+                                   <button onClick={() => setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: prev.schedule!.conditions.filter(c => c.id !== cond.id) } }))}>
+                                      <X size={12} className="text-dr7-red" />
+                                   </button>
+                                </div>
+                                <div className="grid grid-cols-3 gap-2">
+                                   <select className="text-[10px] font-bold bg-white border border-border-primary px-1 py-1 rounded" value={cond.type} onChange={e => {
+                                      const nc = [...newCampaign.schedule!.conditions]; nc[idx].type = e.target.value as any;
+                                      setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
+                                   }}>
+                                      <option value="Revenue">Entrate (Revenue)</option>
+                                      <option value="Vehicle availability">Auto Disponibile</option>
+                                      <option value="Lead count">Conteggio Lead</option>
+                                   </select>
+                                   <select className="text-[10px] font-bold bg-white border border-border-primary px-1 py-1 rounded" value={cond.operator} onChange={e => {
+                                      const nc = [...newCampaign.schedule!.conditions]; nc[idx].operator = e.target.value as any;
+                                      setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
+                                   }}>
+                                      <option value="reaches">Raggiunge</option>
+                                      <option value="greater than">&gt; di</option>
+                                      <option value="is free for more than">Libera da &gt;</option>
+                                   </select>
+                                   <input type="text" placeholder="Valore..." className="text-[10px] bg-white border border-border-primary px-2 py-1 rounded" value={cond.value} onChange={e => {
+                                      const nc = [...newCampaign.schedule!.conditions]; nc[idx].value = e.target.value;
+                                      setNewCampaign(prev => ({ ...prev, schedule: { ...prev.schedule!, conditions: nc } }));
+                                   }} />
+                                </div>
+                             </div>
+                           ))}
+                        </div>
+                      </div>
+
+                      {/* Summary Box */}
+                      <div className="bg-dr7-teal-soft p-4 rounded-lg border border-dr7-teal/20">
+                         <div className="flex items-center gap-2 mb-2">
+                           <MessageSquare size={14} className="text-dr7-teal" />
+                           <p className="text-[10px] font-black uppercase text-dr7-teal">Riepilogo Logica</p>
+                         </div>
+                         <p className="text-xs text-dr7-teal leading-relaxed font-medium">
+                            {getScheduleSummary(newCampaign.schedule)}
+                         </p>
+                      </div>
+
+                      <div className="pt-2">
+                        <button 
+                          onClick={() => handleSendCampaign('Programmata')} 
+                          className="w-full bg-[#16A34A] hover:bg-dr7-green text-white font-black text-xs py-3 px-4 rounded-md transition-all shadow-md uppercase tracking-tight"
+                        >
+                          CONFERMA E PROGRAMMA CAMPAGNA
                         </button>
                       </div>
                     </div>
@@ -498,7 +798,11 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border-primary text-sm font-medium">
-                      {campaigns.map(campaign => (
+                      {campaigns.filter(c => {
+                         if (activeSubTab === 'programmati') return c.status === 'Programmata' || c.status === 'Sospesa';
+                         if (activeSubTab === 'report') return ['Inviata', 'Simulata', 'Fallita'].includes(c.status);
+                         return true;
+                      }).map(campaign => (
                          <CampaignTableRow 
                             key={campaign.id} 
                             name={campaign.name} 
@@ -507,6 +811,8 @@ export default function App() {
                             date={new Date(campaign.createdAt).toLocaleDateString()} 
                             recipients={campaign.recipients === 'all' ? leads.length : 0} 
                             onDelete={() => setCampaigns(prev => prev.filter(c => c.id !== campaign.id))}
+                            schedule={campaign.schedule}
+                            getSummary={getScheduleSummary}
                          />
                       ))}
                     </tbody>
@@ -1189,22 +1495,71 @@ function LeadTableRow({ name, phone, lists, status, date, onDelete }: any) {
   );
 }
 
-function CampaignTableRow({ name, list, status, date, recipients, onDelete }: any) {
+function CampaignTableRow({ name, list, status, date, recipients, onDelete, schedule, getSummary }: any) {
   return (
-    <tr className="hover:bg-[#FAFAFA] transition-colors group">
-      <td className="p-4 align-top"><div className="space-y-1"><p className="font-bold text-black text-sm">{name}</p><p className="text-[11px] text-text-secondary">Lista: {list}</p><p className="text-[10px] text-text-secondary italic">Creato il: {date}</p></div></td>
-      <td className="p-4 text-text-secondary text-xs">{date}</td>
-      <td className="p-4 text-xs font-semibold">{recipients > 0 ? recipients.toLocaleString() : 'N/A'}</td>
-      <td className="p-4"><span className="flex items-center gap-2 text-xs font-medium text-text-secondary"><ImageIcon size={14} className="text-dr7-teal" /> Media</span></td>
-      <td className="p-4">
-        <span className={`px-2.5 py-0.5 text-white text-[9px] font-bold rounded-full uppercase ${
-          status === 'Inviata' ? 'bg-[#059669]' : 
-          status === 'Programmata' ? 'bg-[#2563EB]' : 
-          status === 'Simulata' ? 'bg-amber-500' :
-          'bg-gray-500'
-        }`}>{status}</span>
+    <tr className="hover:bg-[#FAFAFA] transition-colors group border-b border-border-primary last:border-0">
+      <td className="p-4 align-top">
+        <div className="space-y-1">
+          <p className="font-bold text-black text-sm">{name}</p>
+          <div className="flex gap-2">
+            <span className="text-[9px] font-bold text-text-secondary bg-gray-100 px-1.5 py-0.5 rounded uppercase tracking-tighter">Lista: {list}</span>
+            <span className="text-[9px] font-bold text-text-muted italic">Creato: {date}</span>
+          </div>
+          {schedule && (
+             <div className="mt-2 p-2 bg-gray-50 border border-border-primary rounded flex items-start gap-2 max-w-sm">
+                <Calendar size={12} className="text-dr7-teal mt-0.5 shrink-0" />
+                <p className="text-[10px] text-text-secondary leading-tight italic">
+                   {getSummary(schedule)}
+                </p>
+             </div>
+          )}
+        </div>
       </td>
-      <td className="p-4 text-right"><div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity"><button className="p-1 hover:text-dr7-red" onClick={onDelete}><Trash2 size={14} /></button></div></td>
+      <td className="p-4 text-text-secondary text-xs align-top font-mono">
+         {schedule?.type === 'single' ? schedule.singleDate : `Ogni ${schedule?.recurrenceUnit === 'day' ? 'giorno' : schedule?.recurrenceUnit === 'week' ? 'settimana' : 'mese'}`}
+      </td>
+      <td className="p-4 text-xs font-semibold align-top">{recipients > 0 ? recipients.toLocaleString() : 'N/A'}</td>
+      <td className="p-4 align-top">
+         <span className="flex items-center gap-2 text-xs font-medium text-text-secondary">
+           <ImageIcon size={14} className="text-dr7-teal" /> Media
+         </span>
+         {schedule && schedule.conditions && schedule.conditions.length > 0 && (
+            <div className="mt-2 flex flex-col gap-1">
+               {schedule.conditions.map((c: any) => (
+                  <span key={c.id} className="text-[9px] font-bold text-dr7-teal lowercase bg-dr7-teal/5 border border-dr7-teal/10 px-1.5 py-0.5 rounded shrink-0 w-fit">
+                     automation: {c.type}
+                  </span>
+               ))}
+            </div>
+         )}
+      </td>
+      <td className="p-4 align-top">
+        <div className="flex flex-col gap-2">
+          <span className={`inline-block px-2.5 py-0.5 text-white text-[9px] font-bold rounded-full uppercase text-center ${
+            status === 'Inviata' ? 'bg-[#059669]' : 
+            status === 'Programmata' ? 'bg-[#2563EB]' : 
+            status === 'Simulata' ? 'bg-amber-500' :
+            status === 'Sospesa' ? 'bg-dr7-red' :
+            'bg-gray-500'
+          }`}>{status}</span>
+          
+          {schedule && (
+            <div className={`text-[9px] font-black uppercase text-center px-1 py-0.5 rounded border ${schedule.isActive ? 'border-dr7-green text-dr7-green' : 'border-gray-200 text-text-muted'}`}>
+               {schedule.isActive ? 'ACTIVE' : 'PAUSED'}
+            </div>
+          )}
+        </div>
+      </td>
+      <td className="p-4 text-right align-top">
+        <div className="flex justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+           <button className="p-2 bg-white border border-border-primary hover:text-dr7-teal rounded shadow-sm transition-all" title="Edit">
+              <Settings size={14} />
+           </button>
+           <button className="p-2 bg-white border border-border-primary hover:text-dr7-red rounded shadow-sm transition-all" onClick={onDelete} title="Delete">
+              <Trash2 size={14} />
+           </button>
+        </div>
+      </td>
     </tr>
   );
 }
